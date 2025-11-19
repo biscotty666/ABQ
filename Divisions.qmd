@@ -1,0 +1,189 @@
+---
+title: "City Divisions"
+format: gfm
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, paged.print = FALSE)
+```
+
+```{r}
+#| message: false
+library(tidycensus)
+library(data.table)
+library(tidyverse)
+library(ggspatial)
+library(geojsonsf)
+library(sf)
+library(rvest)
+```
+
+# City Council
+
+```{r}
+# download.file("https://data.cabq.gov/government/citycouncildistricts/CityCouncilDistricts.kmz", "data/council-districts.kmz")
+
+# unzip("data/council-districts.kmz")
+# file.rename("data/doc.kml", "data/council-districts.kml")
+# file.remove("data/council-districts.kmz")
+# council_dists <- st_read("data/council-districts.kml")[, -2]
+# st_write(council_dists, "data/abq-divisions.gpkg", layer = "council")
+council_dists <- st_read("data/abq-divisions.gpkg", layer = "council")
+council_dists
+dist_num <- c(4, 7, 3, 2, 6, 9, 8, 5, 1)
+district <- paste("District", dist_num)
+council_dists$district <- district
+```
+
+```{r}
+ggplot(council_dists) +
+  annotation_map_tile(
+    type = "osm",
+    cachedir = "~/.cache/maps/",
+    zoomin = -1,
+    alpha = 0.7
+  ) +
+  geom_sf(fill = NA, linewidth = 1) +
+  geom_sf_text(aes(label = district)) +
+  theme_void() +
+  labs(title = "Albuquerque Council Districts") +
+  coord_sf(crs = 32113, datum = 32113)
+```
+
+```{r}
+download.file("https://coagisweb.cabq.gov/arcgis/rest/services/public/adminboundaries/MapServer/8/query?where=1%3D1&text=&objectIds=&time=&geometry=&geometryType=esriGeometryEnvelope&inSR=&spatialRel=esriSpatialRelIntersects&relationParam=&outFields=*&returnGeometry=true&maxAllowableOffset=&geometryPrecision=&outSR=&returnIdsOnly=false&returnCountOnly=false&orderByFields=&groupByFieldsForStatistics=&outStatistics=&returnZ=false&returnM=false&gdbVersion=&returnDistinctValues=false&f=pjson", "data/police_commands.geojson")
+
+police_commands <- st_read("data/police_commands.geojson")
+```
+
+```{r}
+police_commands
+ggplot(police_commands) +
+  geom_sf()
+```
+
+
+```{r}
+inc_json_url <- "https://coageo.cabq.gov/cabqgeo/rest/services/Incidents/MapServer/0/query?where=1%3D1&text=&objectIds=&time=&geometry=&geometryType=esriGeometryEnvelope&inSR=&spatialRel=esriSpatialRelIntersects&relationParam=&outFields=*&returnableOffset=&geometryPrecision=&outSR=&returnIdsOnly=false&returnCountOnly=false&orderByFields=&groupByFieldsForStatistics=&outStatistics=&returnZ=false&returnM=false&gdbVersion=&returnDistinctValues=false&f=pjson"
+
+inc_json <- st_read(inc_json_url)
+
+head(inc_json)
+
+nibr_abq_codes <- read_csv("https://data.cabq.gov/publicsafety/policeincidents/nibrAbqCodes.csv")
+head(nibr_abq_codes)
+
+incidents <- st_read("data/abq-divisions.gpkg", layer = "incidents")
+str(incidents)
+```
+
+```{r}
+description_html <- incidents$Description
+head(description_html)
+```
+
+```{r}
+library(rvest)
+
+test <- read_html(description_html[1]) %>% html_table()
+test <- map_dfr(description_html, ~ {
+  read_html(.x) %>% html_table()
+},
+.id = "id_row"
+)
+str(test)
+
+n
+
+test <- test %>%
+  pivot_wider(names_from = `Field Name`, values_from = `Field Value`)
+
+names(test)
+incidents$call_number <- test$CallNumber
+incidents$report_datetime <- test$ReportDateTime
+incidents$description <- test$Description
+incidents$location <- test$Location
+```
+
+```{r}
+unique(incidents$description)
+incidents <- incidents %>% select(-Description)
+incidents[incidents$description == "37 SHOPLIFTING", ]
+unique(incidents$description)
+range(incidents$report_datetime)
+```
+
+```{r}
+non_crime <- c(
+  "31 SUSP PERS/VEHS", "11 ANIMAL CALL",
+  "39-1 LOUD MUSIC", "39-5 PANHANDLERS",
+  "39-2 LOUD PARTY", "33 FIRE CALL",
+  "43 RESCUE CALL", "29 WANTED PERSON",
+  "28 MISSING PERSON", "31S ONSITE SUSPICIOU",
+  "16 PRISONER PU/INCU"
+)
+disturbances <- c(
+  "39-3 SHOTS FIRED", "41 NEIGHBOR TROUBLE",
+  "39S ONSITE DISTURBAN", "32 FIGHT INPROGRESS",
+  "39 DISTURBANCE"
+)
+vehicle_theft <- c("27-7 AUTO THEFT", "27-7W WARMUP VEH THEFT")
+burglary <- c(
+  "27-5C BURGLARY COMM", "27-5R BURGLARY RES",
+  "27-5A BURGLARY AUTO"
+)
+shoplifting <- c("37 SHOPLIFTING")
+assault <- c(
+  "27-4 AGGR ASSAULT/BAT", "27-9 STABBING",
+  "32 FIGHT INPROGRESS", "27-8 SHOOTING"
+)
+comm_theft <- c("27-0 FORGERY/CC/CHECK", "27-6 THEFT/FRAUD/EMBE")
+other <- c("38 VANDALISM", "57 NARCOTICS")
+robbery <- c("27-3I ARMED ROB INDIV", "27-3C ARMED ROB COMM")
+
+incidents$category <- "Crime"
+incidents[incidents$description %in% non_crime, "category"] <- "Non Crime"
+incidents[incidents$description %in% disturbances, "category"] <- "Disturbances"
+incidents[incidents$description %in% vehicle_theft, "category"] <- "Car Theft"
+incidents[incidents$description %in% burglary, "category"] <- "Burglary"
+incidents[incidents$description %in% shoplifting, "category"] <- "Shoplifting"
+incidents[incidents$description %in% assault, "category"] <- "Assault"
+incidents[incidents$description %in% other, "category"] <- "Other"
+incidents[incidents$description %in% comm_theft, "category"] <- "Commercial Theft"
+incidents[incidents$description %in% robbery, "category"] <- "Robbery"
+
+incidents[incidents$category == "Crime", ]
+
+incidents %>%
+  filter(category != "Non Crime" & category != "Disturbances") %>%
+  ggplot() +
+  annotation_map_tile(
+    type = "osm",
+    cachedir = "~/.cache/maps/",
+    zoomin = -1,
+    alpha = 0.5
+  ) +
+  geom_sf(aes(color = category), cex = 1) +
+  geom_sf(data = council_dists, fill = NA, linewidth = 0.5) +
+  geom_sf_text(data = council_dists, aes(label = district)) +
+  theme_void()
+```
+
+```{r}
+incidents %>%
+  filter(category == "Other") %>%
+  ggplot() +
+  annotation_map_tile(
+    type = "osm",
+    cachedir = "~/.cache/maps/",
+    zoomin = -1
+  ) +
+  geom_sf(aes(color = category))
+```
+
+```{r}
+council_dists
+```
+
+
