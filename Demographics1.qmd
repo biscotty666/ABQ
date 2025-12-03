@@ -1,0 +1,477 @@
+---
+title: "Demographics"
+format: gfm
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, paged.print = FALSE)
+```
+
+```{r}
+#| message: false
+library(tidycensus)
+library(data.table)
+library(tidyverse)
+library(ggspatial)
+library(geojsonsf)
+library(sf)
+library(rvest)
+library(janitor)
+library(gt)
+library(areal)
+library(tigris)
+options(tigris_use_cache = TRUE)
+```
+
+# Goal
+
+Compare demographics among city council districts in Albuquerque. The demographics will include household income, median home value and 
+
+# City Council
+
+Had to add `method = "curl"` to download.
+
+```{r}
+#| eval: false
+download.file("https://www.berncoclerk.gov/wp-content/uploads/2025/07/BERNCO_CLERKJuly2025.gdb_.zip", "data/bernalillo.zip", method = "curl")
+unzip("data/bernalillo.zip", overwrite = T)
+```
+
+```{r}
+council_dists_bc <- st_read("data/BC_CityCouncil/ABQ_CityCouncils.shp") %>%
+  select(district = DISTRICTNU) %>%
+  mutate(district = paste("District", district))
+council_dists_bc
+```
+
+The downloaded file was not complete. I had to manually download the file.
+
+```{r}
+#| eval: false
+download.file("https://www.berncoclerk.gov/wp-content/uploads/2023/02/LosRanchos.zip", "data/test.zip", method = "curl")
+unzip("data/LosRanchos.zip")
+```
+
+```{r}
+los_ranchos <- st_read("data/LosRanchos/LosRanchos.shp") %>%
+  select(district = Name)
+council_dists <- rbind(council_dists_bc, los_ranchos)
+```
+
+```{r}
+ggplot(council_dists) +
+  annotation_map_tile(
+    type = "osm",
+    cachedir = "~/.cache/maps/",
+    zoomin = -1,
+    alpha = 0.7
+  ) +
+  geom_sf(aes(color = district), fill = NA, linewidth = 1) +
+  geom_sf_text(aes(label = district)) +
+  theme_void() +
+  labs(title = "Albuquerque Council Districts")
+```
+
+
+# Demographics
+
+```{r}
+vars <- c(
+  med_house_value = "B25077_001",
+  income_hh = "B19001_001",
+  population = "B01003_001",
+  income_pc = "B19013_001",
+  gini = "B19083_001",
+  med_age = "B01002_001"
+)
+```
+
+```{r}
+#| eval: false
+bern_data <- get_acs(
+  geography = "tract",
+  state = "NM",
+  county = "Bernalillo",
+  variables = vars,
+  output = "wide",
+  year = 2023,
+  geometry = T,
+  cache_table = T
+)
+
+st_write(bern_data, "data/demographics.gpkg", layer = "county")
+
+st_layers("data/demographics.gpkg")
+
+nm_data <- get_acs(
+  geography = "county",
+  state = "NM",
+  variables = vars,
+  output = "wide",
+  year = 2023,
+  geometry = T,
+  cache_table = T
+)
+
+st_write(nm_data, "data/demographics.gpkg", layer = "state")
+
+us_data <- get_acs(
+  geography = "state",
+  variables = vars,
+  output = "wide",
+  year = 2023,
+  geometry = T,
+  cache_table = T
+)
+
+st_write(us_data, "data/demographics.gpkg", layer = "country")
+
+bern_edu <- get_acs(
+  geography = "tract",
+  state = "NM",
+  county = "Bernalillo",
+  table = "B15003",
+  output = "wide",
+  year = 2023,
+  geometry = T,
+  cache_table = T
+) %>%
+  select(-2) %>%
+  select(!ends_with("M")) %>%
+  mutate(
+    no_hs_deg = rowSums(across("B15003_001E":"B15003_016E")),
+    hs_equivalent = rowSums(across("B15003_017E":"B15003_018E")),
+    some_college = rowSums(across("B15003_019E":"B15003_020E")),
+    bach_assoc_deg = rowSums(across("B15003_021E":"B15003_022E")),
+    grad_deg = rowSums(across("B15003_023E":"B15003_025E"))
+  ) %>%
+  select(-c("B15003_001E":"B15003_025E"))
+
+st_write(bern_edu, "data/demographics.gpkg", layer = "education")
+```
+
+
+```{r}
+bernalillo_demographics <-
+  st_read("data/demographics.gpkg", layer = "county") %>%
+  select(-2)
+
+fix_names <- function(df) {
+  df %>%
+    rename_with(~ sub("E$", "", .)) %>%
+    rename_with(~ sub("M$", "_moe", .))
+}
+
+bernalillo_demographics <-
+  bernalillo_demographics %>%
+  fix_names() %>%
+  st_transform(2258)
+```
+
+```{r}
+summary(bernalillo_demographics)
+```
+
+```{r}
+bernalillo_demographics %>%
+  filter(population == 0)
+```
+
+These seem to provide no useful information, so I will drop them.
+
+```{r}
+bernalillo_demographics <-
+  bernalillo_demographics %>% filter(population != 0)
+```
+
+```{r}
+bernalillo_demographics %>%
+  filter(is.na(med_house_value))
+```
+
+Replace NAs with median values.
+
+```{r}
+bernalillo_demographics <- bernalillo_demographics %>%
+  filter(population != 0) %>%
+  mutate(
+    med_house_value = ifelse(is.na(med_house_value),
+      median(med_house_value, na.rm = T),
+      med_house_value
+    ),
+    income_pc = ifelse(is.na(income_pc),
+      median(income_pc, na.rm = T),
+      income_pc
+    ),
+    med_house_value_moe = ifelse(is.na(med_house_value_moe),
+      mean(med_house_value_moe, na.rm = T),
+      med_house_value_moe
+    ),
+    income_pc_moe = ifelse(is.na(income_pc_moe),
+      mean(income_pc_moe, na.rm = T),
+      income_pc_moe
+    ),
+    gini = ifelse(is.na(gini),
+      mean(gini, na.rm = T),
+      gini
+    ),
+    gini_moe = ifelse(is.na(gini_moe),
+      mean(gini_moe, na.rm = T),
+      gini_moe
+    )
+  )
+
+summary(bernalillo_demographics)
+```
+
+```{r}
+bern_edu <- st_read("data/demographics.gpkg", layer = "education") %>%
+  st_drop_geometry()
+setdiff(bern_edu$GEOID, bern_ests$GEOID)
+bern_edu[bern_edu$GEOID %in% c("35001980300", "35001940800"), ]
+```
+
+```{r}
+bern_edu <- bern_edu %>%
+  filter(!(GEOID %in% c("35001980300", "35001940800")))
+nrow(bernalillo_demographics)
+bern_ests <- bernalillo_demographics %>%
+  select(!ends_with("moe"))
+
+bern_ests <- left_join(bern_ests, bern_edu, by = "GEOID")
+```
+
+```{r}
+bern_ests
+```
+
+
+```{r}
+aw_res <- aw_interpolate(council_dists,
+  tid = district,
+  source = bern_ests, sid = GEOID,
+  weight = "sum", output = "sf",
+  extensive = "population",
+  intensive = c(
+    "med_house_value", "income_hh",
+    "income_pc", "gini", "med_age"
+  )
+)
+
+st_interpolate_aw(bern_ests[-1], extensive = F)
+
+bern_ests$area <- st_area(bern_ests)
+sum(bern_ests$area)
+
+abq <- st_intersection(council_dists, bern_ests) %>%
+  group_by(GEOID) %>%
+  mutate(weight = area / sum(area)) %>%
+  mutate(population_weighted = population * weight)
+
+abq %>%
+  st_drop_geometry() %>%
+  select(-c(area, weight, population)) %>%
+  group_by(district) %>%
+  summarise(
+    population = as.numeric(sum(population_weighted)),
+    med_house_value = median(med_house_value),
+    income_hh = mean(income_hh),
+    med_age = mean(med_age),
+    income_pc = mean(income_pc),
+    gini = mean(gini)
+  ) %>%
+  gt(rowname_col = "district") %>%
+  cols_label(
+    population = "Population",
+    med_house_value = "Med House Value",
+    income_hh = "HH Income",
+    income_pc = "PC Income",
+    med_age = "Age",
+    gini = "GINI"
+  ) %>%
+  tab_header(
+    title = md("**Basic Demographics for Albuquerque**")
+  ) %>%
+  tab_source_note(
+    source_note = md("*Source: census.gov, acs5, 2023*")
+  ) %>%
+  opt_stylize(style = 2) %>%
+  fmt_currency(
+    columns = c(med_house_value, income_hh, income_pc),
+    decimals = 0
+  ) %>%
+  fmt_number(columns = "med_age", decimals = 1) %>%
+  fmt_number(columns = "gini", decimals = 3) %>%
+  fmt_number(columns = "population", decimals = 0)
+```
+
+```{r}
+summary(abq)
+```
+
+```{r}
+summary(aw_res)
+```
+
+```{r}
+population <- aw_res %>% select(district, population)
+population
+ggplot(population, aes(x = population)) +
+  geom_histogram() +
+  facet_wrap(~district)
+```
+
+```{r}
+summary(bern_ests)
+```
+
+```{r}
+bernalillo_demographics %>%
+  arrange(population) %>%
+  head(3)
+```
+
+```{r}
+bernalillo_demographics <-
+  bernalillo_demographics %>%
+  filter(population > 20)
+```
+
+```{r}
+summary(bernalillo_demographics)
+```
+
+```{r}
+bernalillo_demographics %>%
+  filter(is.na(med_house_value))
+```
+
+Replace NAs with median value for district
+
+```{r}
+avg_house_val <- bernalillo_demographics %>%
+  st_drop_geometry() %>%
+  group_by(district) %>%
+  summarise(
+    avg_house_val = median(med_house_value, na.rm = T),
+    avg_house_val_moe = mean(med_house_value_moe, na.rm = T)
+  )
+avg_house_val
+```
+
+```{r}
+bernalillo_demographics <-
+  bernalillo_demographics %>%
+  mutate(
+    med_house_value =
+      ifelse(is.na(med_house_value),
+        median(med_house_value, na.rm = T),
+        med_house_value
+      ),
+    med_house_value_moe =
+      ifelse(is.na(med_house_value_moe),
+        mean(med_house_value_moe, na.rm = T),
+        med_house_value_moe
+      )
+  )
+
+summary(bernalillo_demographics)
+```
+
+```{r}
+st_join(bernalillo_demographics, council_dists)
+```
+
+
+## Population
+
+```{r}
+ggplot(bernalillo_demographics) +
+  annotation_map_tile(
+    type = "osm",
+    cachedir = "~/.cache/maps/",
+    zoomin = -1,
+    alpha = 0.7
+  ) +
+  geom_sf(
+    data = council_dists,
+    aes(color = district),
+    fill = NA, linewidth = 1
+  ) +
+  geom_sf(aes(fill = population), alpha = 0.5) +
+  geom_sf_text(data = council_dists, aes(label = district), color = "red") +
+  scale_fill_viridis_c() +
+  scale_color_brewer(palette = "Set1") +
+  theme_void() +
+  labs(
+    title = "Albuquerque Poulation Density",
+    caption = "Source: Census.gov 2023 ACS"
+  )
+```
+
+
+
+
+```{r}
+library(data.table)
+demographics_dt <- demographics %>%
+  st_drop_geometry() %>%
+  as.data.table()
+```
+
+```{r}
+income <- demographics_dt[income_hh > 10]
+```
+
+```{r}
+ggplot(income, aes(income_hh)) +
+  geom_histogram(bins = 15) +
+  facet_wrap(~district) +
+  labs(
+    title = "2023 Household Income in Albuquerque, NM",
+    subtitle = "By district",
+    caption = "Source: census.gov ACS"
+  )
+```
+
+```{r}
+ggplot(demographics, aes(x = district, y = income_hh)) +
+  geom_boxplot(aes(fill = district)) +
+  theme_bw() +
+  labs(
+    y = "Household Income",
+    title = "2023 Household Income in Albuquerque, NM",
+    subtitle = "By district",
+    caption = "Source: census.gov ACS"
+  ) +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank(),
+    legend.title = element_blank()
+  )
+```
+
+```{r}
+income_hh_dist <- demographics %>%
+  st_drop_geometry() %>%
+  group_by(district) %>%
+  summarise(income_hh_mean = mean(income_hh))
+```
+
+```{r}
+library(gt)
+gt(income_hh_dist %>% arrange(desc(income_hh_mean))) %>%
+  fmt_currency()
+```
+
+```{r}
+testdemographics %>%
+  select(-ends_with("moe")) %>%
+  select(-c(GEOID, district.1)) %>%
+  st_drop_geometry() %>%
+  head()
+```
+

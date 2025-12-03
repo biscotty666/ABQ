@@ -1,7 +1,7 @@
 {
   description = "A basic flake with a shell";
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/25.11";
     systems.url = "github:nix-systems/default";
     flake-utils = {
       url = "github:numtide/flake-utils";
@@ -46,6 +46,7 @@
               GWmodel
               RPostgres
               XML
+              areal
               blscrapeR
               broom_helpers
               car

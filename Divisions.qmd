@@ -44,7 +44,7 @@ ggplot(council_dists) +
     type = "osm",
     cachedir = "~/.cache/maps/",
     zoomin = -1,
-    alpha = 0.7
+    alpha = 0.5
   ) +
   geom_sf(aes(color = district), fill = NA, linewidth = 1) +
   geom_sf_text(aes(label = district)) +
@@ -56,14 +56,18 @@ ggplot(council_dists) +
 # Police commands
 
 ```{r}
-# download.file("https://coagisweb.cabq.gov/arcgis/rest/services/public/adminboundaries/MapServer/8/query?where=1%3D1&text=&objectIds=&time=&geometry=&geometryType=esriGeometryEnvelope&inSR=&spatialRel=esriSpatialRelIntersects&relationParam=&outFields=*&returnGeometry=true&maxAllowableOffset=&geometryPrecision=&outSR=&returnIdsOnly=false&returnCountOnly=false&orderByFields=&groupByFieldsForStatistics=&outStatistics=&returnZ=false&returnM=false&gdbVersion=&returnDistinctValues=false&f=pjson", "data/police_commands.geojson")
+#| eval: false
+download.file("https://coagisweb.cabq.gov/arcgis/rest/services/public/adminboundaries/MapServer/8/query?where=1%3D1&text=&objectIds=&time=&geometry=&geometryType=esriGeometryEnvelope&inSR=&spatialRel=esriSpatialRelIntersects&relationParam=&outFields=*&returnGeometry=true&maxAllowableOffset=&geometryPrecision=&outSR=&returnIdsOnly=false&returnCountOnly=false&orderByFields=&groupByFieldsForStatistics=&outStatistics=&returnZ=false&returnM=false&gdbVersion=&returnDistinctValues=false&f=pjson", "data/police_commands.geojson")
 
-# police_commands <- st_read("data/police_commands.geojson")
-# police_commands <- clean_names(police_commands)
-# st_write(police_commands, "data/abq-divisions.gpkg", layer = "police")
+police_commands <- st_read("data/police_commands.geojson")
+police_commands <- clean_names(police_commands)
+st_write(police_commands, "data/abq-divisions.gpkg", layer = "police")
+```
 
+```{r}
 police_commands <- st_read("data/abq-divisions.gpkg", layer = "police")
 ```
+
 
 ```{r}
 ggplot(police_commands) +
@@ -86,18 +90,16 @@ ggplot(police_commands) +
 # Parks and Open Space
 
 ```{r}
+#| eval: false
 url_openspace <- "https://data.cabq.gov/community/openspace/CityOpenSpace.kmz"
 download.file(url_openspace, "data/openspace.kmz")
 unzip("data/openspace.kmz", exdir = "data/")
 file.rename("data/doc.kml", "data/openspace.kml")
 file.remove("data/openspace.kmz")
 
-openspace <- st_read("data/openspace.kml")
-openspace <- clean_names(openspace)
-names(openspace)
-```
+openspace <- st_read("data/openspace.kml") %>%
+  clean_names(openspace)
 
-```{r}
 description_html <- openspace$description
 description <- map_dfr(description_html, ~ {
   table <- read_html(.x) %>% html_table()
@@ -115,6 +117,9 @@ openspace <- openspace[, -2] %>%
 st_write(openspace, "data/abq-divisions.gpkg", layer = "openspace")
 ```
 
+```{r}
+openspace <- st_read("data/abq-divisions.gpkg", layer = "openspace")
+```
 
 ```{r}
 ggplot(openspace) +
@@ -137,38 +142,210 @@ ggplot(openspace) +
 ```
 
 ```{r}
-library(tigris)
-options(tigris_use_cache = TRUE)
+#| eval: false
+url_openspace_fh_trails <- "https://data.cabq.gov/community/openspace/OpenSpaceFoothillsTrails.kmz"
+download.file(url_openspace_fh_trails, "data/download.kmz")
+unzip("data/download.kmz", exdir = "data/")
+file.rename("data/doc.kml", "data/openspace_fh_trails.kml")
+file.remove("data/download.kmz")
+
+openspace_fh_trails <- st_read("data/openspace_fh_trails.kml") %>%
+  clean_names()
+
+description_html <- openspace_fh_trails$description
+
+description <- map_dfr(description_html, ~ {
+  table <- read_html(.x) %>% html_table()
+  table[[2]]
+},
+.id = "id_row"
+) %>%
+  pivot_wider(names_from = "X1", values_from = "X2") %>%
+  clean_names()
+
+openspace_fh_trails <- openspace_fh_trails[, -2] %>%
+  cbind(description) %>%
+  select(-c(name, notes, length))
+
+st_write(openspace_fh_trails, "data/abq-divisions.gpkg", layer = "openspace_fh_trails")
 ```
 
-
 ```{r}
-vars <- c("B25077_001", "B19001_001", "B01003_001", "B19013_001", "B19083_001")
-vars_desc <- c("med_house_value", "income_hh", "population", "income_pc", "gini")
-vars_e <- map_chr(vars, \(x) paste0(x, "E"))
-vars_m <- map_chr(vars, \(x) paste0(x, "M"))
-vars_desc_m <- map_chr(vars_desc, \(x) paste0(x, "_moe"))
-```
-
-```{r}
-bern_data <- get_acs(
-  geography = "tract",
-  state = "NM",
-  county = "Bernalillo",
-  variables = vars,
-  output = "wide",
-  year = 2023,
-  geometry = T,
-  cache_table = T
+openspace_fh_trails <- st_read("data/abq-divisions.gpkg",
+  layer = "openspace_fh_trails"
 )
-bern_data
+ggplot(openspace_fh_trails %>% st_transform(32113)) +
+  annotation_map_tile(
+    type = "osm",
+    cachedir = "~/.cache/maps/",
+    zoomin = -1,
+    alpha = 0.7
+  ) +
+  geom_sf() +
+  theme_void() +
+  xlim(476500, 485000) +
+  labs(
+    title = "Albuquerque Open Space",
+    subtitle = "Foothill Trails",
+    caption = "Source: https://data.cabq.gov"
+  ) +
+  coord_sf(crs = 32113, datum = 32113)
 ```
 
 ```{r}
-names(bern_data)[names(bern_data) %in% vars_e] <- vars_desc
-names(bern_data)[names(bern_data) %in% vars_m] <- vars_desc_m
-bern_data <- bern_data %>% select(-NAME, everything())
-bern_data
-st_write(bern_data, "data/bernalillo-demogrphics.gpkg")
+url_parks <- "https://data.cabq.gov/community/parksandrec/parks/CityParks.kmz"
+
+get_abq_data <- function(url, name) {
+  download.file(url, "data/download.kmz")
+  unzip("data/download.kmz", exdir = "data/")
+  file.rename("data/doc.kml", paste0(
+    "data/", name,
+    ".kml"
+  ))
+  file.remove("data/download.kmz")
+}
+
+get_abq_data(url_parks, "parks")
+
+parks <- st_read("data/parks.kml") %>%
+  clean_names()
+
+parks
+
+description_html <- parks$description
+
+description <- map_dfr(description_html, ~ {
+  table <- read_html(.x) %>% html_table()
+  table[[2]]
+},
+.id = "id_row"
+) %>%
+  pivot_wider(names_from = "X1", values_from = "X2") %>%
+  clean_names()
+
+description
+
+parks <- parks[, -2] %>%
+  cbind(description) %>%
+  select(-name)
+
+st_write(parks, "data/abq-divisions.gpkg", layer = "parks")
+```
+
+```{r}
+parks <- st_read("data/abq-divisions.gpkg", layer = "parks")
+
+ggplot(parks %>% st_transform(32113)) +
+  annotation_map_tile(
+    type = "osm",
+    cachedir = "~/.cache/maps/",
+    zoomin = -1,
+    alpha = 0.7
+  ) +
+  geom_sf(aes(fill = park_status), color = "lightgreen", linewidth = 0.5) +
+  theme_void() +
+  labs(
+    title = "Albuquerque Parks",
+    caption = "Source: https://data.cabq.gov"
+  )
+```
+
+```{r}
+ggplot(parks %>% st_transform(32113)) +
+  annotation_map_tile(
+    type = "osm",
+    cachedir = "~/.cache/maps/",
+    zoomin = -1,
+    alpha = 0.7
+  ) +
+  geom_sf(aes(fill = park_status),
+    color = "darkgreen", linewidth = 0.5
+  ) +
+  geom_sf(
+    data = openspace, aes(fill = status),
+    color = "lightgreen", linewidth = 0.5
+  ) +
+  theme_void() +
+  labs(
+    title = "Albuquerque Parks and Open Space",
+    caption = "Source: https://data.cabq.gov"
+  )
+```
+
+
+```{r}
+url_neighborhoods <- "https://data.cabq.gov/community/neighborhoods/NeighborhoodAssociations.kmz"
+
+get_abq_data(url_neighborhoods, "neighborhoods")
+
+neighborhoods <- st_read("data/neighborhoods.kml") %>%
+  select(-2)
+
+nrow(neighborhoods)
+st_write(parks, "data/abq-divisions.gpkg", layer = "parks")
+```
+
+```{r}
+ggplot(neighborhoods %>% st_transform(32113)) +
+  annotation_map_tile(
+    type = "osm",
+    cachedir = "~/.cache/maps/",
+    zoomin = -1,
+    alpha = 0.7
+  ) +
+  geom_sf(fill = NA, color = "red", linewidth = 0.5) +
+  theme_void() +
+  labs(
+    title = "Albuquerque Neighborhood Associations",
+    caption = "Source: https://data.cabq.gov"
+  )
+```
+
+```{r}
+url_address <- "https://data.cabq.gov/business/addressatlas/addressatlaspagegrid.kmz"
+
+get_abq_data(url_address, "address")
+
+address_grid <- st_read("data/address.kml") %>%
+  clean_names()
+address_grid
+description_html <- address_grid$description
+
+description <- map_dfr(description_html, ~ {
+  table <- read_html(.x) %>% html_table()
+  table[[2]]
+},
+.id = "id_row"
+) %>%
+  pivot_wider(names_from = "X1", values_from = "X2") %>%
+  clean_names() %>%
+  select(zonemapname)
+
+address_grid <-
+  address_grid[, -2] %>% cbind(description)
+```
+
+
+```{r}
+ggplot(address_grid) +
+  annotation_map_tile(
+    type = "osm",
+    cachedir = "~/.cache/maps/",
+    zoomin = -1,
+    alpha = 0.7
+  ) +
+  geom_sf(fill = NA, color = "red", linewidth = 0.5) +
+  geom_sf_text(aes(label = name), color = "black") +
+  ylim(450000, 465500) +
+  xlim(455000, 480000) +
+  theme_void() +
+  labs(
+    title = "Albuquerque Square Mile Grid",
+    caption = "Source: https://data.cabq.gov"
+  )
+```
+
+```{r}
+address_grid <- address_grid %>% st_transform(32113)
 ```
 
