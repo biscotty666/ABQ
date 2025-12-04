@@ -29,22 +29,23 @@ In this article, I would like to do a comparative analysis of various economic f
 
 Dealing with "real-life" data.
 
-# City Council Districts
+# Data Preparation
+
+## City Council Districts
 
 I will start with the easy part, obtaining the boundaries for the city council districts. There are just two twists here: the data from the city website is useless, and; there's a big hole in the middle of Albuquerque, which is the township of Los Ranchos. The Albuquerque website provides a wealth of data, although it is not necessarily well thought-out or well-maintained. In many of the data sets, the relevant data is contained in tables embeded in html, all of which are in a single variable in the data set. In this case, the problem is worse: the website only provides the councilors' names, not district numbers, and the names are for councilors from several years ago!
 
 Fortunately, the county website provides a reasonable dataset in the form of a zipped shapefile. And they provide a geometry for Los Ranchos. Los Ranchos is sort of the Beverly Hills of Albuquerque, in the sense that it is a separate enclave which is (almost) entirely surrounded by Albuquerque, and where the largest properties and mansions are located.
 
-The data portal for Bernalillo county is not very friendly for programatic downloading. My first effort to download and unzip the
-
-
-Had to add `method = "curl"` to download.
+The data portal for Bernalillo county is not very friendly for programmatic downloading. My first effort to download and unzip the file containing the city council boundaries failed to produce a usable file. Adding the argument `method = "curl"` allowed me to download the file which is a zipped shapefile.
 
 ```{r}
 #| eval: false
 download.file("https://www.berncoclerk.gov/wp-content/uploads/2025/07/BERNCO_CLERKJuly2025.gdb_.zip", "data/bernalillo.zip", method = "curl")
 unzip("data/bernalillo.zip", overwrite = T)
 ```
+
+The only variables I'm interested in are the district number and geometry. I'll just grab that, fix the variable name, and make the content more descriptive for easy mapping.
 
 ```{r}
 council_dists_bc <- st_read("data/BC_CityCouncil/ABQ_CityCouncils.shp") %>%
@@ -53,7 +54,7 @@ council_dists_bc <- st_read("data/BC_CityCouncil/ABQ_CityCouncils.shp") %>%
 council_dists_bc
 ```
 
-The downloaded file for Los Ranchos was not complete. I had to manually download the file.
+The downloaded file for Los Ranchos was not complete even with the additional argument, so I had to manually download the file.
 
 ```{r}
 #| eval: false
@@ -61,12 +62,20 @@ download.file("https://www.berncoclerk.gov/wp-content/uploads/2023/02/LosRanchos
 unzip("data/LosRanchos.zip")
 ```
 
+I'll combine the files and transform to an appropriate projection.
+
 ```{r}
 los_ranchos <- st_read("data/LosRanchos/LosRanchos.shp") %>%
   select(district = Name)
+
+st_crs(los_ranchos) == st_crs(council_dists_bc)
+crsuggest::suggest_crs(council_dists_bc) %>% head(2)
+
 council_dists <- rbind(council_dists_bc, los_ranchos) %>%
-  st_transform(2258)
+  st_transform(6528)
 ```
+
+I'll plot the district boundaries with `ggplot`, adding a base map with `ggspatial::annotation_map_tile`.
 
 ```{r}
 ggplot(council_dists) +
@@ -82,7 +91,9 @@ ggplot(council_dists) +
   labs(title = "Albuquerque Council Districts")
 ```
 
-# Demographics
+## Demographics
+
+I want to look at some basic demographic and economic information. I will use `tidycensus` to download data from `census.gov`, using the information from 2023's five-year American Community Survey. I want tract level data for my study area. I want to compare to state-wide and country-wide data, so I'll grab those at a less detailed level.
 
 ```{r}
 vars <- c(
@@ -110,8 +121,6 @@ bern_data <- get_acs(
 
 st_write(bern_data, "data/demographics.gpkg", layer = "county", append = F)
 
-st_layers("data/demographics.gpkg")
-
 nm_data <- get_acs(
   geography = "county",
   state = "NM",
@@ -134,7 +143,12 @@ us_data <- get_acs(
 )
 
 st_write(us_data, "data/demographics.gpkg", layer = "country", append = F)
+```
 
+I would like to compare education levels as well. The data is broken down into 25 variables, so I will group them a little to make this easier. I'm also going to drop the margin of error information.
+
+```{r}
+#| eval: false
 bern_edu <- get_acs(
   geography = "tract",
   state = "NM",
@@ -148,7 +162,7 @@ bern_edu <- get_acs(
   select(-2) %>%
   select(!ends_with("M")) %>%
   mutate(
-    no_hs_deg = rowSums(across("B15003_001E":"B15003_016E")),
+    no_hs_deg = rowSums(across("B15003_002E":"B15003_016E")),
     hs_some_colleg = rowSums(across("B15003_017E":"B15003_020E")),
     bach_assoc_deg = rowSums(across("B15003_021E":"B15003_022E")),
     grad_deg = rowSums(across("B15003_023E":"B15003_025E"))
@@ -159,10 +173,19 @@ st_write(bern_edu, "data/demographics.gpkg", layer = "education", append = F)
 ```
 
 ```{r}
+bernalillo_edu <-
+  st_read("data/demographics.gpkg", layer = "education")
 bernalillo_demographics <-
-  st_read("data/demographics.gpkg", layer = "county") %>%
-  select(-2)
+  st_read("data/demographics.gpkg", layer = "county")
+```
 
+```{r}
+summary(bernalillo_demographics)
+```
+
+There is clean-up work to do here. There are some NAs, some areas with 0 population, an an unneeded NAME column, and the ugly variable names to deal with. I also need to make sure it is in the correct crs. First I'll fix the names and transform the coordinates, and do a simple join with the educational table based on the GEOID.
+
+```{r}
 fix_names <- function(df) {
   df %>%
     rename_with(~ sub("E$", "", .)) %>%
@@ -171,11 +194,10 @@ fix_names <- function(df) {
 
 bernalillo_demographics <-
   bernalillo_demographics %>%
+  select(-2) %>% 
   fix_names() %>%
-  st_transform(2258)
+  st_transform(6528)
 
-bernalillo_edu <-
-  st_read("data/demographics.gpkg", layer = "education")
 
 bernalillo_demographics <- bernalillo_demographics %>%
   left_join(st_drop_geometry(bernalillo_edu), by = "GEOID") %>%
@@ -186,42 +208,17 @@ bernalillo_demographics <- bernalillo_demographics %>%
 summary(bernalillo_demographics)
 ```
 
-```{r}
-bernalillo_demographics_dt <- 
-  as.data.table(bernalillo_demographics)
-```
-
+First, I will see how many areas have 0 population.
 
 ```{r}
-bernalillo_demographics %>%
-  filter(population == 0)
+bernalillo_demographics %>% filter(population == 0)
 ```
 
-```{r}
-bernalillo_demographics_dt[population == 0]
-```
-
-
-These seem to provide no useful information, so I will drop them.
-
-```{r}
-bernalillo_demographics <-
-  bernalillo_demographics %>% filter(population != 0)
-bernalillo_demographics_dt <-
-  bernalillo_demographics_dt[population != 0]
-```
-
-```{r}
-bernalillo_demographics %>%
-  summary()
-```
-
-
-Replace NAs with median values.
+These contain no information, so I'll drop them. With regarding to the remaining missing values, there are so few that I'll just replace them with averages.
 
 ```{r}
 bernalillo_demographics <- bernalillo_demographics %>%
-  group_by()
+  filter(population != 0) %>% 
   mutate(
     med_house_value = ifelse(is.na(med_house_value),
       median(med_house_value, na.rm = T),
@@ -237,6 +234,7 @@ summary(bernalillo_demographics)
 ```
 
 ```{r}
+#| eval: false
 bernalillo_demographics_dt[, `:=`(
   med_house_value = ifelse(is.na(med_house_value),
                            median(med_house_value, na.rm = T),
@@ -248,12 +246,64 @@ bernalillo_demographics_dt[, `:=`(
 summary(bernalillo_demographics_dt)
 ```
 
+Most of the data seems normal. I am curious about the tract(s) with no household income and very small populations. Are they the same?
+
+```{r}
+bernalillo_demographics %>% 
+  filter(income_hh < 100 | population < 150)
+```
+
+The duplicate house value is suspicious, the income for the first is clearly wrong. I'm going to remove the second record, since there are so few people, and use an average value for the income in the first record.
+
+```{r}
+bernalillo_demographics <- 
+  bernalillo_demographics %>% 
+  filter(population > 20) %>% 
+  mutate(
+    income_hh = ifelse(income_hh == 0, median(income_hh), income_hh)
+  )
+```
+
+
+```{r}
+summary(bernalillo_demographics)
+```
+
+I would also like to calculate population density and percentages for the poverty and education variables. For population density, I'll need areas for each tract changing to square kilometers with the `units` package. I'll do the same for square miles.
+
+```{r}
+library(units)
+st_crs(bernalillo_demographics)
+bernalillo_demographics$area <- 
+  st_area(bernalillo_demographics) %>% 
+  set_units(km^2)
+
+bernalillo_demographics$area_sm <- 
+  st_area(bernalillo_demographics) %>% 
+  set_units(mi^2)
+
+bernalillo_demographics$pop_dens <-
+  bernalillo_demographics$population / bernalillo_demographics$area
+
+summary(bernalillo_demographics$pop_dens)
+```
+
+```{r}
+demo_pcts <- 
+  modify(bernalillo_demographics[7:11], 
+       \(x) x / bernalillo_demographics$population) %>% 
+  rename_with(~ sub("$", "_pct", .), .cols = everything()) %>% 
+  st_drop_geometry()
+
+bernalillo_demographics <- 
+  bernalillo_demographics %>% 
+  cbind(demo_pcts)
+
+summary(bernalillo_demographics)
+```
 
 ```{r}
 library(rmapshaper)
-bernalillo_demographics$area <- st_area(bernalillo_demographics)
-bernalillo_demographics$pop_dens <-
-  bernalillo_demographics$population / (bernalillo_demographics$area / 5280^2)
 cd_demographics <- ms_clip(
   target = bernalillo_demographics, clip = council_dists,
   remove_slivers = T
