@@ -163,7 +163,7 @@ bern_edu <- get_acs(
   select(!ends_with("M")) %>%
   mutate(
     no_hs_deg = rowSums(across("B15003_002E":"B15003_016E")),
-    hs_some_colleg = rowSums(across("B15003_017E":"B15003_020E")),
+    hs_some_college = rowSums(across("B15003_017E":"B15003_020E")),
     bach_assoc_deg = rowSums(across("B15003_021E":"B15003_022E")),
     grad_deg = rowSums(across("B15003_023E":"B15003_025E"))
   ) %>%
@@ -269,6 +269,58 @@ bernalillo_demographics <-
 summary(bernalillo_demographics)
 ```
 
+```{r}
+bern_blocks <- blocks(state = "NM", county = "Bernalillo", year = 2020) %>%
+  st_transform(st_crs(bernalillo_demographics))
+names(bern_blocks)
+```
+
+```{r}
+names(bernalillo_demographics)
+bern_tract_ext <- bernalillo_demographics %>%
+  select(GEOID, population, no_hs_deg, hs_some_college, 
+           bach_assoc_deg, grad_deg)
+bern_tract_int <- bernalillo_demographics %>%
+  select(GEOID, med_house_value, income_hh, 
+         gini, med_age)
+```
+
+```{r}
+bern_demo_int <- interpolate_pw(
+  bern_tract_ext, council_dists,
+  to_id = "district", extensive = TRUE,
+  weights = bern_blocks, weight_column = "POP20"
+)
+
+bern_demo_ext <- interpolate_pw(
+  bern_tract_int, council_dists,
+  to_id = "district", extensive = FALSE,
+  weights = bern_blocks, weight_column = "POP20"
+)
+
+names(bern_tract_ext)
+
+bern_tract_ext
+
+interpolate_pw(
+  council_dists, bern_tract_int,
+  to_id = "GEOID", extensive = FALSE,
+  weights = bern_blocks, weight_column = "POP20"
+)
+
+council_totals <- cbind(
+  bern_demo_int %>% arrange(district),
+  bern_demo_ext %>% arrange(district) %>% st_drop_geometry()
+)
+summary(council_totals)
+```
+
+```{r}
+names(council_totals)
+```
+
+
+
 I would also like to calculate population density and percentages for the poverty and education variables. For population density, I'll need areas for each tract changing to square kilometers with the `units` package. I'll do the same for square miles.
 
 ```{r}
@@ -302,29 +354,74 @@ bernalillo_demographics <-
 summary(bernalillo_demographics)
 ```
 
+Finally, I'll summarize the data by district by spatially clipping it to the council districts using `rmapshaper`.
+
+
+
 ```{r}
 library(rmapshaper)
-cd_demographics <- ms_clip(
-  target = bernalillo_demographics, clip = council_dists,
-  remove_slivers = T
-)
+cd_demographics <- 
+  st_join(bernalillo_demographics, council_dists) %>% 
+  st_crop(st_bbox(council_dists)) %>% 
+  filter(!is.na(district))
 
+cd_demographics <- cd_demographics %>% 
+  group_by(GEOID) %>% 
+  mutate(n = n()) %>%
+  ungroup() %>% 
+  mutate(
+    population = population / n,
+    in_poverty = in_poverty / n,
+    no_hs_deg = no_hs_deg / n,
+    hs_some_college = hs_some_college / n,
+    bach_assoc_deg = bach_assoc_deg / n,
+    grad_deg = grad_deg / n
+  )
 ```
 
 
 ```{r}
-ggplot() +
+ggplot(council_dists) +
+  annotation_map_tile(
+    type = "osm",
+    cachedir = "~/.cache/maps/",
+    zoomin = -1,
+    alpha = 0.6
+  ) +
+  geom_sf(data = test, aes(fill = in_poverty), alpha = 0.4) +
+  geom_sf(color = "red", fill = NA) +
+  geom_sf_text(aes(label = district)) +
+  scale_fill_viridis_c() +
+  theme_void()
+```
+
+```{r}
+ggplot(cd_demographics) +
   annotation_map_tile(
     type = "osm",
     cachedir = "~/.cache/maps/",
     zoomin = -1,
     alpha = 0.5
   ) +
-  geom_sf(data = cd_demographics, aes(fill = population), alpha = 0.4) +
+  geom_sf(aes(fill = as.numeric(pop_dens)), alpha = 0.4) +
   geom_sf(data = council_dists, color = "red", fill = NA) +
+  geom_sf_text(data = council_dists, aes(label = district)) +
   scale_fill_viridis_c() +
   theme_void()
 ```
+
+```{r}
+ggplot(cd_demographics, aes(income_hh)) +
+  geom_boxplot() +
+  coord_flip() +
+  facet_wrap(~district) +
+  labs(
+    title = "2023 Household Income in Albuquerque, NM",
+    subtitle = "By district",
+    caption = "Source: census.gov ACS"
+  )
+```
+
 
 ```{r}
 ggplot() +
