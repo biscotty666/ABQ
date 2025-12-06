@@ -361,23 +361,28 @@ Finally, I'll summarize the data by district by spatially clipping it to the cou
 ```{r}
 library(rmapshaper)
 cd_demographics <- 
-  st_join(bernalillo_demographics, council_dists) %>% 
-  st_crop(st_bbox(council_dists)) %>% 
-  filter(!is.na(district))
+  st_intersection(bernalillo_demographics, council_dists) %>% 
+  st_crop(st_bbox(council_dists))
+
+cd_demographics$area_split <- 
+  st_area(cd_demographics) %>% 
+  set_units(km^2)
 
 cd_demographics <- cd_demographics %>% 
   group_by(GEOID) %>% 
-  mutate(n = n()) %>%
-  ungroup() %>% 
   mutate(
-    population = population / n,
-    in_poverty = in_poverty / n,
-    no_hs_deg = no_hs_deg / n,
-    hs_some_college = hs_some_college / n,
-    bach_assoc_deg = bach_assoc_deg / n,
-    grad_deg = grad_deg / n
-  )
+    area_pct = area_split / area,
+    population_pct = population * area_pct,
+    in_poverty_pct = in_poverty * area_pct,
+    no_hs_deg_pct = no_hs_deg * area_pct,
+    hs_some_college_pct = hs_some_college * area_pct,
+    bach_assoc_deg_pct = bach_assoc_deg * area_pct,
+    grad_deg_pct = grad_deg * area_pct
+  ) %>% 
+  arrange(GEOID)
 ```
+
+
 
 
 ```{r}
@@ -388,7 +393,7 @@ ggplot(council_dists) +
     zoomin = -1,
     alpha = 0.6
   ) +
-  geom_sf(data = test, aes(fill = in_poverty), alpha = 0.4) +
+  geom_sf(data = cd_demographics, aes(fill = in_poverty), alpha = 0.4) +
   geom_sf(color = "red", fill = NA) +
   geom_sf_text(aes(label = district)) +
   scale_fill_viridis_c() +
