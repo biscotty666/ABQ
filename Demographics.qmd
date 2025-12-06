@@ -411,10 +411,10 @@ ggplot(cd_demographics) +
 ```
 
 ```{r}
-ggplot(cd_demographics, aes(income_hh)) +
+ggplot(cd_demographics, aes(x = income_hh, y = district)) +
   geom_boxplot() +
+  geom_jitter(height = 0.1, color = "blue", size = 1, alpha = 0.6) + 
   coord_flip() +
-  facet_wrap(~district) +
   labs(
     title = "2023 Household Income in Albuquerque, NM",
     subtitle = "By district",
