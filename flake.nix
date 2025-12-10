@@ -43,6 +43,7 @@
             rstudio
             quarto
             ( with rPackages; [
+              GGally
               GWmodel
               RPostgres
               XML
@@ -72,6 +73,7 @@
               ggpattern
               ggridges
               ggspatial
+                ggtext
               gifski
               gt
               gtExtras
