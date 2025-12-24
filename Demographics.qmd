@@ -1,6 +1,8 @@
 ---
 title: "Demographics"
 format: gfm
+exec:
+  freeze: true
 ---
 
 ```{r setup, include=FALSE}
@@ -13,25 +15,25 @@ library(tidycensus)
 library(tidyverse)
 library(ggspatial)
 library(sf)
-library(janitor)
-library(gt)
-library(areal)
-library(glue)
-library(spdep)
-library(tigris)
 library(units)
 library(crsuggest)
-options(tigris_use_cache = TRUE)
+library(gt)
+library(ggtext)
 ```
 
-# Introduction
+TODO: Finish Introduction
 
-In this article, I would like to do a comparative analysis of various economic factors such as income, housing value, poverty and equality among the city council districts of Albuquerque. I will obtain the demographic data from `census.gov` using `tidycensus`. After cleaning, the data will be spatially joined with the council districts in order to produce both comparitive summaries of aggregated data, but also distribution analyses of the data. Finally, I will explore clustering of the data points.
+My goal in this article is to use US government census data to compare city council districts in Albuquerque with regard to social and economic demographics. Since census tracts often cross county district lines, I will need 
+ p
+
+In this article, I would like to do a comparative analysis of various economic factors such as income, hgusing value, poverty and equality among the city council districts of Albuquerque. I will obtain the demographic data from `census.gov` using `tidycensus`. After cleaning, the data will be spatially joined with the council districts in order to produce both comparitive summaries of aggregated data, but also distribution analyses of the data. Finally, I will explore clustering of the data points. The article will be split into two parts.
 
 # Data Preparation
 
 ## City Council Districts
 
+
+TODO: Edit Council Districts
 I will start with the easy part, obtaining the boundaries for the city council districts. There are just two twists here: the data from the city website is useless, and; there's a big hole in the middle of Albuquerque, which is the township of Los Ranchos. The Albuquerque website provides a wealth of data, although it is not necessarily well thought-out or well-maintained. In many of the data sets, the relevant data is contained in tables embeded in html, all of which are in a single variable in the data set. In this case, the problem is worse: the website only provides the councilors' names, not district numbers, and the names are for councilors from several years ago!
 
 Fortunately, the county website provides a reasonable dataset in the form of a zipped shapefile. And they provide a geometry for Los Ranchos. Los Ranchos is sort of the Beverly Hills of Albuquerque, in the sense that it is a separate enclave which is (almost) entirely surrounded by Albuquerque, and where the largest properties and mansions are located.
@@ -314,6 +316,7 @@ cd_demographics %>%
 As you can see, we now have separate slices for tracts which span more than one district, but the data has been copied into each new row. For intensive variables like medians this is okay, but for extensive variables like population, they must be spread across the new areas. I'll do this based on areal proportioning. First I'll calculate the areas of each new subdivision, and the percentage they represent of the former regions. This allows me to re-calculate the extensive variables, assigning the proper proportion to each.
 
 ```{r}
+#| eval: false
 cd_demographics$area_split <- 
   st_area(cd_demographics) %>% 
   set_units(km^2)
@@ -322,12 +325,12 @@ cd_demographics <- cd_demographics %>%
   group_by(GEOID) %>% 
   mutate(
     area_pct = area_split / area,
-    population = population * area_pct,
-    in_poverty = in_poverty * area_pct,
-    no_hs_deg = no_hs_deg * area_pct,
-    hs_some_college = hs_some_college * area_pct,
-    bach_assoc_deg = bach_assoc_deg * area_pct,
-    grad_deg = grad_deg * area_pct
+    population = round(population * area_pct, 0),
+    in_poverty = round(in_poverty * area_pct, 0),
+    no_hs_deg = round(no_hs_deg * area_pct, 0),
+    hs_some_college = round(hs_some_college * area_pct, 0),
+    bach_assoc_deg = round(bach_assoc_deg * area_pct, 0),
+    grad_deg = round(grad_deg * area_pct, 0)
   ) %>% 
   arrange(GEOID)
 
@@ -359,8 +362,10 @@ ggplot(cd_demographics) +
   geom_sf(data = council_dists, aes(color = district), 
           fill = NA, linewidth = 0.5) +
   geom_sf_text(data = council_dists, aes(label = district)) +
+  geom_sf_text(aes(label = GEOID)) +
   scale_fill_viridis_c() +
-  scale_color_viridis_d(guide = "none") +
+  scale_color_viridis_d() +
+  guides(color = "none") +
   theme_void() +
   labs(
     title = "2023 People in Povery in Albuquerque, NM",
@@ -369,6 +374,11 @@ ggplot(cd_demographics) +
     fill = "People\n in Poverty"
   )
 ```
+
+```{r}
+cd_demographics %>% filter(GEOID == "35001940602")
+```
+
 
 ```{r}
 ggplot(cd_demographics) +
@@ -393,6 +403,86 @@ ggplot(cd_demographics) +
 ```
 
 ```{r}
+library(classInt)
+options(scipen = 999)
+br <- classInt::classIntervals(cd_demographics$income_hh,
+                               n = 7, style = "fisher")$brks %>% 
+  as.integer()
+br_sd <- classIntervals(
+  cd_demographics$income_hh, 5,
+  style = "sd", sd_m = c(-Inf, -1, 0, 1, +Inf))
+br_quantile <- classIntervals(
+  cd_demographics$income_hh, 5,
+  style = "quantile")
+br_pretty <- classIntervals(
+  cd_demographics$income_hh, 5,
+  style = "pretty")
+br_fisher <- classIntervals(
+  cd_demographics$income_hh, 5,
+  style = "fisher")
+br_ht <- classIntervals(
+  cd_demographics$income_hh,
+  style = "headtails", thr = 1)
+br_km <- classIntervals(
+  cd_demographics$income_hh, 5,
+  style = "kmeans")
+br_hc_single <- classIntervals(
+  cd_demographics$income_hh, 5,
+  style = "hclust", method = "single"
+)
+br_hc_complete <- classIntervals(
+  cd_demographics$income_hh, 5,
+  style = "hclust", method = "complete"
+)
+br_bc <- classIntervals(
+  cd_demographics$income_hh, 5,
+  style = "bclust", verbose = F
+)
+br_sd$brks; br_quantile$brks; br_pretty$brks; br_fisher$brks; br_ht$brks; br_km$brks
+br_hc_single$brks; br_hc_complete$brks; br_bc$brks
+```
+
+```{r}
+pal <- findColours(br_sd, c("blue", "grey", "red"))
+length(br_hc_complete$brks)
+br_hc_complete$brks
+class(br_hc_complete)
+```
+
+
+```{r}
+cd_demographics$income_hh_q <- cut(cd_demographics$income_hh, br_km$brks,
+                        include.lowest = TRUE, dig.lab = 10)
+pal <- colorRampPalette(c("yellow", "darkgreen", "purple"))(length(br_km$brks))
+pal
+```
+
+```{r}
+ggplot(cd_demographics) +
+  annotation_map_tile(
+    type = "osm",
+    cachedir = "~/.cache/maps/",
+    zoomin = -1,
+    alpha = 0.5
+  ) +
+  geom_sf(aes(fill = income_hh_q), alpha = 0.4) +
+  geom_sf(data = council_dists, aes(color = district), fill = NA, linewidth = 1) +
+  geom_sf_text(data = council_dists, aes(label = district)) +
+  scale_fill_manual(values = pal) +
+  scale_color_viridis_d(guide = "none") +
+  theme_void() +
+  labs(
+    title = "2023 Median Household Income in Albuquerque, NM",
+    subtitle = "By census tract",
+    caption = "Source: census.gov ACS",
+    fill = md("Median<br>Household<br>Income")
+  ) +
+  theme(
+    legend.title = element_markdown(),
+  )
+```
+
+```{r}
 ggplot(cd_demographics, aes(x = income_hh, y = district)) +
   geom_boxplot() +
   geom_jitter(height = 0.1, color = "blue", size = 1, alpha = 0.6) + 
@@ -403,6 +493,12 @@ ggplot(cd_demographics, aes(x = income_hh, y = district)) +
     caption = "Source: census.gov ACS"
   )
 ```
+
+```{r}
+names(cd_demographics)
+cd_demographics_df <- cd_demographics %>% st_drop_geometry()
+```
+
 
 ```{r}
 ggplot(cd_demographics) +
@@ -444,52 +540,23 @@ ggplot() +
 ```
 
 ```{r}
-bern_blocks <- blocks(state = "NM", county = "Bernalillo", year = 2020) %>%
-  st_transform(st_crs(bernalillo_demographics))
-names(bern_blocks)
-```
-
-```{r}
-names(bernalillo_demographics)
-bern_tract_ext <- bernalillo_demographics %>%
-  select(c(population, no_hs_deg, hs_equivalent, some_college, bach_assoc_deg, grad_deg))
-bern_tract_int <- bernalillo_demographics %>%
-  select(med_house_value, income_hh, income_pc, gini, med_age)
-```
-
-```{r}
-bern_demo_int <- interpolate_pw(
-  bern_tract_ext, council_dists,
-  to_id = "district", extensive = TRUE,
-  weights = bern_blocks, weight_column = "POP20"
-)
-
-bern_demo_ext <- interpolate_pw(
-  bern_tract_int, council_dists,
-  to_id = "district", extensive = FALSE,
-  weights = bern_blocks, weight_column = "POP20"
-)
-
-council_totals <- cbind(
-  bern_demo_int %>% arrange(district),
-  bern_demo_ext %>% arrange(district) %>% st_drop_geometry()
-)
-```
-
-```{r}
-names(council_totals)
-```
-
-```{r}
-council_totals %>%
+cd_demographics %>% 
   st_drop_geometry() %>%
-  select(district, population, med_house_value, income_hh, income_pc, med_age, gini) %>%
+  group_by(district) %>% 
+  summarise(
+    population = sum(population), 
+    med_house_value = median(med_house_value),
+    income_hh = median(income_hh),
+    med_age = median(med_age),
+    in_poverty = sum(in_poverty),
+    gini = mean(gini)
+  ) %>% 
+  select(district, population, med_house_value, income_hh, med_age, in_poverty, gini) %>%
   gt(rowname_col = "district") %>%
   cols_label(
     population = "Population",
     med_house_value = "Med House Value",
     income_hh = "HH Income",
-    income_pc = "PC Income",
     med_age = "Age",
     gini = "GINI"
   ) %>%
@@ -501,7 +568,7 @@ council_totals %>%
   ) %>%
   opt_stylize(style = 2) %>%
   fmt_currency(
-    columns = c(med_house_value, income_hh, income_pc),
+    columns = c(med_house_value, income_hh),
     decimals = 0
   ) %>%
   fmt_number(columns = "med_age", decimals = 1) %>%
@@ -509,53 +576,9 @@ council_totals %>%
   fmt_number(columns = "population", decimals = 0)
 ```
 
-Replace NAs with median value for district
 
 ```{r}
-bernalillo_demographics$area <- st_area(bernalillo_demographics)
-
-names(bern_by_dist)
-
-bern_by_dist <- st_intersection(bernalillo_demographics, council_dists) %>%
-  group_by(GEOID) %>%
-  mutate(weight = area / sum(area)) %>%
-  mutate(
-    population_w = population * weight,
-    no_hs_deg_w = no_hs_deg * weight,
-    hs_equivalent_w = hs_equivalent * weight,
-  ) %>%
-  arrange(GEOID)
-bern_by_dist
-
-plot(bern_by_dist)
-```
-
-## Population
-
-```{r}
-library(data.table)
-demographics_dt <- demographics %>%
-  st_drop_geometry() %>%
-  as.data.table()
-```
-
-```{r}
-income <- demographics_dt[income_hh > 10]
-```
-
-```{r}
-ggplot(income, aes(income_hh)) +
-  geom_histogram(bins = 15) +
-  facet_wrap(~district) +
-  labs(
-    title = "2023 Household Income in Albuquerque, NM",
-    subtitle = "By district",
-    caption = "Source: census.gov ACS"
-  )
-```
-
-```{r}
-ggplot(demographics, aes(x = district, y = income_hh)) +
+ggplot(cd_demographics, aes(x = district, y = income_hh)) +
   geom_boxplot(aes(fill = district)) +
   theme_bw() +
   labs(
@@ -571,57 +594,5 @@ ggplot(demographics, aes(x = district, y = income_hh)) +
     axis.title.x = element_blank(),
     legend.title = element_blank()
   )
-```
-
-
-
-```{r}
-bern_blocks <- blocks(state = "NM", county = "Bernalillo", year = 2020) %>%
-  st_transform(st_crs(bernalillo_demographics))
-names(bern_blocks)
-```
-
-```{r}
-names(bernalillo_demographics)
-bern_tract_ext <- bernalillo_demographics %>%
-  select(GEOID, population, no_hs_deg, hs_some_college, 
-           bach_assoc_deg, grad_deg)
-bern_tract_int <- bernalillo_demographics %>%
-  select(GEOID, med_house_value, income_hh, 
-         gini, med_age)
-```
-
-```{r}
-bern_demo_int <- interpolate_pw(
-  bern_tract_ext, council_dists,
-  to_id = "district", extensive = TRUE,
-  weights = bern_blocks, weight_column = "POP20"
-)
-
-bern_demo_ext <- interpolate_pw(
-  bern_tract_int, council_dists,
-  to_id = "district", extensive = FALSE,
-  weights = bern_blocks, weight_column = "POP20"
-)
-
-names(bern_tract_ext)
-
-bern_tract_ext
-
-interpolate_pw(
-  council_dists, bern_tract_int,
-  to_id = "GEOID", extensive = FALSE,
-  weights = bern_blocks, weight_column = "POP20"
-)
-
-council_totals <- cbind(
-  bern_demo_int %>% arrange(district),
-  bern_demo_ext %>% arrange(district) %>% st_drop_geometry()
-)
-summary(council_totals)
-```
-
-```{r}
-names(council_totals)
 ```
 

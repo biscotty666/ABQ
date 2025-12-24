@@ -42,11 +42,13 @@
             texlive.combined.scheme-full
             rstudio
             quarto
+              positron-bin
             ( with rPackages; [
               GGally
               GWmodel
               RPostgres
               XML
+                pandoc
               areal
               blscrapeR
               broom_helpers
@@ -85,6 +87,7 @@
               janitor
               jqr
               jsonlite
+              languageserver
               leaflet
               leaflet_extras
               leaflet_extras2
