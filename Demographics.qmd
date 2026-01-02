@@ -1,6 +1,11 @@
 ---
 title: "Demographics"
-format: gfm
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    toc: true
+    toc-depth: 2
 exec:
   freeze: true
 ---
@@ -24,7 +29,6 @@ library(ggtext)
 TODO: Finish Introduction
 
 My goal in this article is to use US government census data to compare city council districts in Albuquerque with regard to social and economic demographics. Since census tracts often cross county district lines, I will need 
- p
 
 In this article, I would like to do a comparative analysis of various economic factors such as income, hgusing value, poverty and equality among the city council districts of Albuquerque. I will obtain the demographic data from `census.gov` using `tidycensus`. After cleaning, the data will be spatially joined with the council districts in order to produce both comparitive summaries of aggregated data, but also distribution analyses of the data. Finally, I will explore clustering of the data points. The article will be split into two parts.
 
