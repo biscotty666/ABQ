@@ -37,6 +37,25 @@ council_dists$district <- district
 ```
 
 ```{r}
+council_dists_bc <- st_read("data/BC_CityCouncil/ABQ_CityCouncils.shp") %>%
+  select(district = DISTRICTNU) %>%
+  mutate(district = paste("District", district))
+los_ranchos <- st_read("data/LosRanchos/LosRanchos.shp") %>%
+  select(district = Name)
+
+st_crs(los_ranchos) == st_crs(council_dists_bc)
+
+council_dists <- rbind(council_dists_bc, los_ranchos) %>%
+  st_transform(6528)
+council_dists
+```
+
+```{r}
+st_crs(council_dists)
+```
+
+
+```{r}
 ggplot(council_dists) +
   annotation_map_tile(
     type = "osm",
@@ -47,8 +66,7 @@ ggplot(council_dists) +
   geom_sf(fill = NA, linewidth = 1) +
   geom_sf_text(aes(label = district)) +
   theme_void() +
-  labs(title = "Albuquerque Council Districts") +
-  coord_sf(crs = 32113, datum = 32113)
+  labs(title = "Albuquerque Council Districts")
 ```
 
 ```{r}
@@ -65,27 +83,29 @@ ggplot(police_commands) +
 
 
 ```{r}
-inc_json_url <- "https://coageo.cabq.gov/cabqgeo/rest/services/Incidents/MapServer/0/query?where=1%3D1&text=&objectIds=&time=&geometry=&geometryType=esriGeometryEnvelope&inSR=&spatialRel=esriSpatialRelIntersects&relationParam=&outFields=*&returnableOffset=&geometryPrecision=&outSR=&returnIdsOnly=false&returnCountOnly=false&orderByFields=&groupByFieldsForStatistics=&outStatistics=&returnZ=false&returnM=false&gdbVersion=&returnDistinctValues=false&f=pjson"
-
-inc_json <- st_read(inc_json_url)
-
-head(inc_json)
-
 nibr_abq_codes <- read_csv("https://data.cabq.gov/publicsafety/policeincidents/nibrAbqCodes.csv")
 head(nibr_abq_codes)
 
-incidents <- st_read("data/abq-divisions.gpkg", layer = "incidents")
-str(incidents)
+# incidents <- st_read("data/abq-divisions.gpkg", layer = "incidents")
+
+# str(incidents)
 ```
 
 ```{r}
-test_url <- "https://coageo.cabq.gov/cabqgeo/rest/services/Incidents/MapServer/0/query?where=1%3D1&text=&objectIds=&time=&geometry=&geometryType=esriGeometryEnvelope&inSR=&spatialRel=esriSpatialRelIntersects&relationParam=&outFields=*&returnGeometry=true&maxAllowableOffset=&geometryPrecision=&outSR=&returnIdsOnly=false&returnCountOnly=false&orderByFields=&groupByFieldsForStatistics=&outStatistics=&returnZ=false&returnM=false&gdbVersion=&returnDistinctValues=false&f=kmz"
+incidents_url <- "https://coageo.cabq.gov/cabqgeo/rest/services/Incidents/MapServer/0/query?where=1%3D1&text=&objectIds=&time=&geometry=&geometryType=esriGeometryEnvelope&inSR=&spatialRel=esriSpatialRelIntersects&relationParam=&outFields=*&returnGeometry=true&maxAllowableOffset=&geometryPrecision=&outSR=&returnIdsOnly=false&returnCountOnly=false&orderByFields=&groupByFieldsForStatistics=&outStatistics=&returnZ=false&returnM=false&gdbVersion=&returnDistinctValues=false&f=kmz"
 
-download.file(test_url, "data/test.kmz")
+download.file(incidents_url, "data/incidents.kmz")
 
-unzip("data/test.kmz", exdir = "data/")
+unzip("data/incidents.kmz", exdir = "data/")
 file.rename("data/doc.kml", "data/incidents.kml")
 ```
+
+```{r}
+incidents <- st_read("data/incidents.kml")
+str(incidents)
+incidents[1,]
+```
+
 
 ```{r}
 description_html <- incidents$Description
@@ -102,8 +122,6 @@ test <- map_dfr(description_html, ~ {
 .id = "id_row"
 )
 str(test)
-
-n
 
 test <- test %>%
   pivot_wider(names_from = `Field Name`, values_from = `Field Value`)
