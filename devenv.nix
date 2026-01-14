@@ -9,13 +9,17 @@
     git
     rstudio
     pandoc
+    quarto
+    texliveMedium
     rPackages.classInt
     rPackages.crsuggest
+    rPackages.geofacet
     rPackages.geojsonsf
     rPackages.ggspatial
     rPackages.ggtext
     rPackages.gt
     rPackages.janitor
+    rPackages.nngeo
     rPackages.pagedown
     rPackages.patchwork
     rPackages.prettymapr
