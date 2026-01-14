@@ -380,11 +380,35 @@ race_plot <- function(df) {
 ```
 
 ```{r}
+race_us %>% 
+  group_by(race) %>% 
+  summarise(value = sum(value))
+
+race_us %>% 
+  group_by(hisp) %>% 
+  summarise(value = sum(value))
+
+race_nm %>% 
+  group_by(race) %>% 
+  summarise(value = sum(value))
+
+race_nm %>% 
+  group_by(hisp) %>% 
+  summarise(value = sum(value))
+```
+
+
+```{r}
+race_plot(race_us)
+```
+
+
+```{r}
 race_bern %>% 
   group_by(hisp, race) %>% 
   summarise(value = sum(value)) %>% 
-  mutate(value = ifelse(hisp == "Hispanic", -value, value)) %>% 
-  ggplot(aes(x = value, y = hisp, fill = race)) +
+#  mutate(value = ifelse(hisp == "Hispanic", -value, value)) %>% 
+  ggplot(aes(x = value, y = race)) +
   geom_col()
 
 race_plot(race_bern)
