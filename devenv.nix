@@ -28,6 +28,7 @@
     rPackages.tidycensus
     rPackages.tidyverse
     rPackages.units
+    rPackages.zeallot
   ];
 
   # https://devenv.sh/languages/
