@@ -141,10 +141,9 @@ dist_plot(council_dists %>% filter(district %in% c("District 2", "District 4", "
 
 #  Basic Demographics
 
-I want to look at some basic demographic information, specifically age, sex, race and education, to see how they compare between council districts. I will use `tidycensus` to download data from `census.gov`, using tables from 2023's five-year American Community Survey. I want tract level data for my study area. I also want to compare to state-wide and country-wide data, so I'll grab those at a less detailed level.
+I want to start with some basic demographic information, specifically age, sex, race and education, to see how they compare between council districts. I will use `tidycensus` to download data from `census.gov`, using tables from 2023's five-year American Community Survey. I want tract level data for my study area. I also want to compare to state-wide and country-wide data, so I'll grab those at a less detailed level.
 
-The function to download the data is `get_acs()`, which takes a series of pretty self-explanatory arguments. Once downloaded, quite a bit of processing will be needed to prepare the data for analysis and visualization. I'll start with three functions to download the tables.
-
+The function to download the data is `get_acs()`, which takes a series of pretty self-explanatory arguments. Once downloaded, quite a bit of processing will be needed to prepare the data for analysis and visualization. I'll start with a function to download the tables, since I will need to do this nine times. When getting country level data, only the `geography` argument is used, state level data requires the state name, and the tract level requires the county name. I only need the geometry for the tract level data.
 
 ```{r}
 get_tables <- 
@@ -185,7 +184,7 @@ get_labels <- function(table) {
 }
 ```
 
-Now I can write the clean tables function, which joins the labels to the data. I will also provide a local CRS, and calculate the area for each region. This will be needed when splitting the tract data between council districts.
+Now I can write the clean tables function, which joins the labels to the data.
 
 ```{r}
 clean_tables <- function(df, labels) {
@@ -216,7 +215,7 @@ split_dists <- function(df, vars) {
 
 ## Age and Sex
 
-Now we can start looking at age and sex. For New Mexico and the US, I don't need the geometry, so I'll drop it. I also want to get rid of the rows which are totals and subtotals. The label is currently a combination of sex and age group, so I will split these into seperate columns. Finally, I'll just select the variables I want.
+Now we can start looking at age and sex. I will start by getting the labels for the table variables and download the first dataset. I will use this to set factor levels so that the graphs show the correct order, as well as separating the label into different columns.
 
 ```{r}
 #| message: false
@@ -235,8 +234,11 @@ age_levels <- age_sex_nm %>%
 
 age_sex_nm <- age_sex_nm %>% 
   mutate(agegroup = factor(agegroup, age_levels))
+```
 
+Now I can get the rest of the data, and split the county information into districts.
 
+```{r}
 age_sex_us <- get_tables("us", "B01001A", age_sex_labels) %>% 
   filter(str_detect(label, "years")) %>% 
   separate(label, c("sex", "agegroup"), sep = "_") %>% 
@@ -256,7 +258,7 @@ age_sex_dist <- age_sex_bern %>%
   mutate(agegroup = factor(agegroup, age_levels))
 ```
 
-For now I'm keeping some variables I don't really need. This will help me evaluate the results of the splitting operation. I am expecting a certain amount of data loss, since parts of some of the tracts lie outside the council districts. I would like to do a visual sanity check to verify that the loss makes sense. I'll look at a small portion to see you much variance there is.
+For now I'm keeping some variables I don't really need. This will help me evaluate the results of the splitting operation. I am expecting a certain amount of data loss, since parts of some of the tracts lie outside the council districts. I would like to do a visual sanity check to verify that the loss makes sense. I'll look at a small portion to see how much variance there is.
 
 ```{r}
 age_sex_bern %>% 
@@ -281,20 +283,11 @@ age_sex_dist %>%
 Here we are losing the majority of the population. Let's look at the tract.
 
 ```{r}
-ggplot(age_sex_bern) +
-  annotation_map_tile(
-    type = "osm",
-    cachedir = "~/.cache/maps/",
-    zoomin = -1,
-    alpha = 0.6
-  ) +
-  geom_sf(color = "black", fill = NA, linewidth = 0.5) +
-  geom_sf(data = council_dists, aes(color = district), 
-          fill = NA, linewidth = 2) +
+dist_plot(council_dists) +
+  geom_sf(data = age_sex_bern, color = "black", fill = NA, linewidth = 0.5) +
   geom_sf(data = age_sex_bern %>% filter(geoid == 35001003501), 
           color = "red", fill = NA, linewidth = 2) +
   scale_fill_viridis_c() +
-  scale_color_viridis_d() +
   theme_void() +
   guides(color = "none") +
   xlim(460000, 470000) +
@@ -352,6 +345,86 @@ age_sex_dist %>%
 ```
 
 TODO: add a table
+```{r}
+age_sex_cmp <- age_sex_dist %>% 
+  group_by(sex, agegroup) %>% 
+  summarise(value = sum(value)) %>% 
+  mutate(region = "Albuquerque")
+age_sex_nm$region = "New Mexico"
+age_sex_us$region = "US"
+age_sex_compare <- rbind(age_sex_cmp, age_sex_nm, age_sex_us)
+```
+
+
+```{r}
+age_sex_totals <- age_sex_compare %>% 
+  group_by(region) %>% 
+  summarise(total = sum(value))
+
+age_sex_compare_table <- age_sex_compare %>% 
+   group_by(agegroup, region) %>% 
+  summarise(value = sum(value)) %>%
+  left_join(age_sex_totals) %>%
+  mutate(percent = value / total) %>%
+  select(-c(total, value)) %>%
+  pivot_wider(names_from = region,
+              values_from = percent) %>%
+  ungroup() %>% 
+  mutate(agegroup = factor(agegroup, age_levels))
+
+age_sex_compare_table %>%
+  arrange(agegroup) %>% 
+  gt(rowname_col = "agegroup") %>%
+  fmt_percent(columns = everything(), decimals = 0) %>%
+  tab_style(style = cell_text(align = "center"),
+            locations = cells_column_labels(columns = everything())) %>%
+  cols_width(everything() ~ px(110)) %>%
+  tab_header(
+    title = md("**Comparison of Agegroups**")
+  ) %>%
+  tab_source_note(
+    source_note = md("*Source: census.gov, acs5, 2023*")
+  ) %>%
+  tab_style(style = cell_text(align = "right"),
+            locations = cells_source_notes()) %>%
+  opt_stylize(style = 2)
+```
+
+```{r}
+age_sex_dist_totals <- age_sex_dist %>% 
+  group_by(district) %>% 
+  summarise(total = sum(value))
+
+age_sex_dist_table <- age_sex_dist %>% 
+  filter(district != "Los Ranchos") %>% 
+  group_by(agegroup, district) %>% 
+  summarise(value = sum(value)) %>% 
+  left_join(age_sex_dist_totals) %>% 
+  mutate(percent = value / total) %>% 
+  select(-c(total, value)) %>% 
+  pivot_wider(names_from = district,
+              values_from = percent) %>% 
+  ungroup() %>% 
+  mutate(agegroup = factor(agegroup, age_levels)) %>% 
+  rename_with(~ gsub("District", "Dist", .x))
+
+age_sex_dist_table %>%
+  arrange(agegroup) %>% 
+  gt(rowname_col = "agegroup") %>%
+  fmt_percent(columns = everything(), decimals = 0) %>%
+  tab_style(style = cell_text(align = "center"),
+            locations = cells_column_labels(columns = everything())) %>%
+  tab_header(
+    title = md("**Comparison of Agegroups**")
+  ) %>%
+  tab_source_note(
+    source_note = md("*Source: census.gov, acs5, 2023*")
+  ) %>%
+  tab_style(style = cell_text(align = "right"),
+            locations = cells_source_notes()) %>%
+  opt_stylize(style = 2)
+```
+
 
 ## Race
 
@@ -573,7 +646,8 @@ simplify_education <- function(df) {
 }
 
 
-edu_us <- edu_us %>% simplify_education()
+edu_us <- edu_us %>% 
+  simplify_education()
 ```
 
 ```{r}
@@ -627,12 +701,11 @@ p1 + p2
 
 ```{r}
 edu_dist <- edu_dist %>% 
-  mutate(value = value / 1000) %>% 
   filter(district != "Los Ranchos")
 
 edu_dist %>% 
   mf_plot(c("district", "sex", "education"), 3) +
-  labs(x = "Population (in thousands)",
+  labs(x = "Population",
        title = "Educational attainment in Albuquerque",
        subtitle = "By district") +
   theme(axis.text.y = element_text(size = 6))
@@ -642,7 +715,7 @@ edu_dist %>%
 edu_dist %>% 
   mf_plot(c("district", "sex", "education"), 3) +
   facet_wrap(~district) +
-  labs(x = "Population (in thousands)",
+  labs(x = "Population",
        title = "Educational attainment in Albuquerque",
        subtitle = "By district") +
   theme(axis.text.y = element_text(size = 6))
@@ -676,38 +749,44 @@ edu_graduate_compare %>%
        subtitle = "Albuquerque, State and Country") 
 ```
 
+```{r}
+edu_dist_cmp <- edu_dist %>% 
+  group_by(sex, education) %>% 
+  summarise(value = sum(value)) %>% 
+  mutate(region = "Albuquerque")
+edu_nm$region = "New Mexico"
+edu_us$region = "US"
+edu_compare <- rbind(edu_dist_cmp, edu_nm, edu_us)
+```
 
-cd_demographics %>% 
-  st_drop_geometry() %>%
-  group_by(district) %>% 
-  summarise(
-    population = sum(population), 
-    med_house_value = median(med_house_value),
-    income_hh = median(income_hh),
-    med_age = median(med_age),
-    in_poverty = sum(in_poverty),
-    gini = mean(gini)
-  ) %>% 
-  select(district, population, med_house_value, income_hh, med_age, in_poverty, gini) %>%
-  gt(rowname_col = "district") %>%
-  cols_label(
-    population = "Population",
-    med_house_value = "Med House Value",
-    income_hh = "HH Income",
-    med_age = "Age",
-    gini = "GINI"
-  ) %>%
+```{r}
+edu_totals <- edu_compare %>% 
+  group_by(region) %>% 
+  summarise(total = sum(value))
+
+edu_compare_table <- edu_compare %>% 
+  group_by(education, region) %>% 
+  summarise(value = sum(value)) %>% 
+  left_join(edu_totals) %>% 
+  mutate(percent = value / total) %>% 
+  select(-c(total, value)) %>% 
+  pivot_wider(names_from = region,
+              values_from = percent) %>% 
+  ungroup()
+
+edu_compare_table %>% 
+  gt(rowname_col = "education") %>% 
+  fmt_percent(columns = everything(), decimals = 0) %>% 
+  tab_style(style = cell_text(align = "center"),
+            locations = cells_column_labels(columns = everything())) %>% 
+  cols_width(everything() ~ px(110)) %>%
   tab_header(
-    title = md("**Basic Demographics for Albuquerque**")
+    title = md("**Comparison of Educational Attainment**")
   ) %>%
   tab_source_note(
     source_note = md("*Source: census.gov, acs5, 2023*")
-  ) %>%
-  opt_stylize(style = 2) %>%
-  fmt_currency(
-    columns = c(med_house_value, income_hh),
-    decimals = 0
-  ) %>%
-  fmt_number(columns = "med_age", decimals = 1) %>%
-  fmt_number(columns = "gini", decimals = 3) %>%
-  fmt_number(columns = "population", decimals = 0)
+  ) %>% 
+  tab_style(style = cell_text(align = "right"),
+            locations = cells_source_notes()) %>% 
+  opt_stylize(style = 2)
+```
