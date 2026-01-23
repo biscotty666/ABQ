@@ -6,12 +6,12 @@ format:
     code-tools: true
     toc: true
     toc-depth: 2
-exec:
-  freeze: true
+execute: 
+  freeze: auto
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, paged.print = FALSE)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, paged.print = FALSE)
 ```
 
 I would like to compare the demographics and some key economic data between the city council districts of Albuquerque, as well as comparing Albuquerque to the rest of the state and nation. This will involve obtaining data from `census.gov` as well as local government websites. Since census tracts do not line up with council districts, the census data will need to be interpolated into the council districts.
@@ -21,7 +21,6 @@ Throughout, I will emphasize good coding techniques, especially the creation of 
 I will use the following libraries:
 
 ```{r}
-#| message: false
 library(tidycensus)
 library(tidyverse)
 library(ggspatial)
@@ -218,7 +217,6 @@ split_dists <- function(df, vars) {
 Now we can start looking at age and sex. I will start by getting the labels for the table variables and download the first dataset. I will use this to set factor levels so that the graphs show the correct order, as well as separating the label into different columns.
 
 ```{r}
-#| message: false
 age_sex_labels <- get_labels("B01001A")
 
 age_sex_nm <- get_tables("state", "B01001A", age_sex_labels) %>% 
@@ -315,7 +313,6 @@ mf_plot <- function(df, groups, pos) {
 ```
 
 ```{r}
-#| message: false
 p1 <- age_sex_us %>%
   mf_plot(c("sex", "agegroup"), pos = 2) +
   theme(legend.position = "none",
@@ -334,7 +331,6 @@ p1 + p2
 ```
 
 ```{r}
-#| message: false
 age_sex_dist %>% 
   filter(district != "Los Ranchos") %>% 
   mf_plot(c("district", "sex", "agegroup"), pos = 3) +
@@ -355,32 +351,31 @@ age_sex_us$region = "US"
 age_sex_compare <- rbind(age_sex_cmp, age_sex_nm, age_sex_us)
 ```
 
-
 ```{r}
-age_sex_totals <- age_sex_compare %>% 
-  group_by(region) %>% 
-  summarise(total = sum(value))
+prepare_tables <- function(df, group, variable) {
+  totals <- df %>% 
+    group_by_at(group) %>% 
+    summarise(total = sum(value))
+  df %>% 
+    group_by_at(c(variable, group)) %>%
+    summarise(value = sum(value)) %>%
+    left_join(totals) %>%
+    mutate(percent = value / total) %>%
+    select(-c(total, value)) %>%
+    pivot_wider(names_from = .data[[group]],
+                values_from = percent) %>%
+    ungroup()
+}
 
-age_sex_compare_table <- age_sex_compare %>% 
-   group_by(agegroup, region) %>% 
-  summarise(value = sum(value)) %>%
-  left_join(age_sex_totals) %>%
-  mutate(percent = value / total) %>%
-  select(-c(total, value)) %>%
-  pivot_wider(names_from = region,
-              values_from = percent) %>%
-  ungroup() %>% 
-  mutate(agegroup = factor(agegroup, age_levels))
-
-age_sex_compare_table %>%
-  arrange(agegroup) %>% 
-  gt(rowname_col = "agegroup") %>%
+print_table <- function(df, group, title) {
+  df %>% 
+    arrange(.data[[group]]) %>% 
+  gt(rowname_col = group) %>%
   fmt_percent(columns = everything(), decimals = 0) %>%
   tab_style(style = cell_text(align = "center"),
             locations = cells_column_labels(columns = everything())) %>%
-  cols_width(everything() ~ px(110)) %>%
   tab_header(
-    title = md("**Comparison of Agegroups**")
+    title = md(title)
   ) %>%
   tab_source_note(
     source_note = md("*Source: census.gov, acs5, 2023*")
@@ -388,41 +383,24 @@ age_sex_compare_table %>%
   tab_style(style = cell_text(align = "right"),
             locations = cells_source_notes()) %>%
   opt_stylize(style = 2)
+}
 ```
 
 ```{r}
-age_sex_dist_totals <- age_sex_dist %>% 
-  group_by(district) %>% 
-  summarise(total = sum(value))
-
-age_sex_dist_table <- age_sex_dist %>% 
-  filter(district != "Los Ranchos") %>% 
-  group_by(agegroup, district) %>% 
-  summarise(value = sum(value)) %>% 
-  left_join(age_sex_dist_totals) %>% 
-  mutate(percent = value / total) %>% 
-  select(-c(total, value)) %>% 
-  pivot_wider(names_from = district,
-              values_from = percent) %>% 
-  ungroup() %>% 
+age_sex_compare %>% 
+  prepare_tables("region", "agegroup") %>% 
   mutate(agegroup = factor(agegroup, age_levels)) %>% 
-  rename_with(~ gsub("District", "Dist", .x))
+  print_table(group = "agegroup", title = "**Comparison of Agegroups**") %>% 
+  cols_width(everything() ~ px(110))
+```
 
-age_sex_dist_table %>%
-  arrange(agegroup) %>% 
-  gt(rowname_col = "agegroup") %>%
-  fmt_percent(columns = everything(), decimals = 0) %>%
-  tab_style(style = cell_text(align = "center"),
-            locations = cells_column_labels(columns = everything())) %>%
-  tab_header(
-    title = md("**Comparison of Agegroups**")
-  ) %>%
-  tab_source_note(
-    source_note = md("*Source: census.gov, acs5, 2023*")
-  ) %>%
-  tab_style(style = cell_text(align = "right"),
-            locations = cells_source_notes()) %>%
-  opt_stylize(style = 2)
+```{r}
+age_sex_dist %>% 
+  filter(district != "Los Ranchos") %>% 
+  prepare_tables("district", "agegroup") %>% 
+  mutate(agegroup = factor(agegroup, age_levels)) %>% 
+  rename_with(~ gsub("District", "Dist", .x)) %>% 
+  print_table(group = "agegroup", title = "**Comparison of Agegroups**")
 ```
 
 
@@ -760,33 +738,23 @@ edu_compare <- rbind(edu_dist_cmp, edu_nm, edu_us)
 ```
 
 ```{r}
-edu_totals <- edu_compare %>% 
-  group_by(region) %>% 
-  summarise(total = sum(value))
-
 edu_compare_table <- edu_compare %>% 
-  group_by(education, region) %>% 
-  summarise(value = sum(value)) %>% 
-  left_join(edu_totals) %>% 
-  mutate(percent = value / total) %>% 
-  select(-c(total, value)) %>% 
-  pivot_wider(names_from = region,
-              values_from = percent) %>% 
-  ungroup()
+  prepare_tables("region", "education") %>% 
+  mutate(education = factor(education, edu_levels))
 
 edu_compare_table %>% 
-  gt(rowname_col = "education") %>% 
-  fmt_percent(columns = everything(), decimals = 0) %>% 
-  tab_style(style = cell_text(align = "center"),
-            locations = cells_column_labels(columns = everything())) %>% 
-  cols_width(everything() ~ px(110)) %>%
-  tab_header(
-    title = md("**Comparison of Educational Attainment**")
-  ) %>%
-  tab_source_note(
-    source_note = md("*Source: census.gov, acs5, 2023*")
-  ) %>% 
-  tab_style(style = cell_text(align = "right"),
-            locations = cells_source_notes()) %>% 
-  opt_stylize(style = 2)
+  print_table(group = "education", title = "**Comparison of Educational Attainment**") %>% 
+  cols_width(everything() ~ px(110))
 ```
+
+```{r}
+edu_dist_table <- edu_dist %>% 
+  filter(district != "Los Ranchos") %>% 
+  prepare_tables("district", "education") %>% 
+  mutate(education = factor(education, edu_levels)) %>% 
+  rename_with(~ gsub("District", "Dist", .x))
+
+edu_dist_table %>% 
+  print_table(group = "education", title = "**Comparison of Educational Attainment**")
+```
+
