@@ -5,31 +5,30 @@
   env.GREET = "devenv";
 
   # https://devenv.sh/packages/
-  packages = with pkgs; [
-    git
-    rstudio
-    pandoc
-    quarto
-    texliveMedium
-    rPackages.classInt
-    rPackages.crsuggest
-    rPackages.geofacet
-    rPackages.geojsonsf
-    rPackages.ggspatial
-    rPackages.ggtext
-    rPackages.gt
-    rPackages.janitor
-    rPackages.nngeo
-    rPackages.pagedown
-    rPackages.patchwork
-    rPackages.prettymapr
-    rPackages.rvest
-    rPackages.sf
-    rPackages.tidycensus
-    rPackages.tidyverse
-    rPackages.units
-    rPackages.zeallot
-  ];
+  packages = with pkgs;
+    [ git rstudio pandoc quarto texliveMedium ] ++ (with rPackages; [
+      styler
+      classInt
+      crsuggest
+      geofacet
+      geojsonsf
+      ggspatial
+      ggtext
+      gt
+      janitor
+      nngeo
+      pagedown
+      patchwork
+      prettymapr
+      rnaturalearth
+      rnaturalearthdata
+      rvest
+      sf
+      tidycensus
+      tidyverse
+      units
+      zeallot
+    ]);
 
   # https://devenv.sh/languages/
   languages.r = {
