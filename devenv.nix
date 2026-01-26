@@ -10,6 +10,7 @@
       styler
       classInt
       crsuggest
+      devtools
       geofacet
       geojsonsf
       ggspatial
@@ -22,6 +23,7 @@
       prettymapr
       rnaturalearth
       rnaturalearthdata
+      roxygen2
       rvest
       sf
       tidycensus
