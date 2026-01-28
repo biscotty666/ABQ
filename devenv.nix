@@ -13,10 +13,10 @@
       devtools
       geofacet
       geojsonsf
-      ggsci
+      # ggsci
       ggspatial
       ggtext
-      ggthemes
+      # ggthemes
       gt
       gtExtras
       janitor

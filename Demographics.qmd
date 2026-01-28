@@ -6,6 +6,7 @@ format:
     code-tools: true
     toc: true
     toc-depth: 2
+    theme: cosmo
 execute: 
   freeze: auto
 ---
@@ -413,10 +414,10 @@ age_sex_dist %>%
   mutate(agegroup = factor(agegroup, unique(agegroup))) %>% 
   print_table(group = "agegroup", title = "**Comparison of Agegroups**") %>% 
   data_color(palette = "RColorBrewer::RdYlBu", direction = "row", 
-             domain = c(.01, .17), method = "bin")
+             method = "bin")
 ```
 
-There is, indeed, a lot of variability across districts. Only 2.8% of those in District 2 are 5-9 years old, while the number is 8.0% in District 3. On the other hand, a mere 17.8% in District 3 are 55 years or older, while 36.5% of District 2 is in this category, and District 8 has 41.9%. This high level of variability deserves further study, and could likely prove useful when looking at economic differences between the districts.
+In each row, the darkest red are the lowest values, and the darkest blue are the highest values. There is, indeed, a lot of variability across districts. Only 2.8% of those in District 2 are 5-9 years old, while the number is 8.0% in District 3. On the other hand, a mere 17.8% in District 3 are 55 years or older, while 36.5% of District 2 is in this category, and District 8 has 41.9%. This high level of variability deserves further study, and could likely prove useful when looking at economic differences between the districts.
 
 # Race
 
@@ -588,24 +589,23 @@ edu_levels <- c("No HS Diploma", "High school graduate", edu_levels[-(1:11)])
 simplify_education <- function(df) {
   df %>% 
     mutate(
-    education = case_when(
-      education == "No schooling completed" |
-        education == "Nursery to 4th grade" |
-        education == "5th and 6th grade" |
-        education == "7th and 8th grade" |
-        education == "9th grade" |
-        education == "10th grade" |
-        education == "11th grade" |
-        education == "12th grade, no diploma"
-        ~ "No HS Diploma",
-      education == "Some college, 1 or more years, no degree" |
-        education == "Some college, less than 1 year" |
-        education == "High school graduate (includes equivalency)"
-        ~ "High school graduate",
-      TRUE ~ education
-      )
-    ) %>%
-    mutate(education = factor(education, edu_levels))
+      education = case_when(
+        education == "No schooling completed" |
+          education == "Nursery to 4th grade" |
+          education == "5th and 6th grade" |
+          education == "7th and 8th grade" |
+          education == "9th grade" |
+          education == "10th grade" |
+          education == "11th grade" |
+          education == "12th grade, no diploma"
+          ~ "No HS Diploma",
+        education == "Some college, 1 or more years, no degree" |
+          education == "Some college, less than 1 year" |
+          education == "High school graduate (includes equivalency)"
+          ~ "High school graduate",
+        TRUE ~ education
+        ),
+      education = factor(education, edu_levels)) 
 }
 
 edu_bern <- edu_bern %>% 
@@ -658,6 +658,8 @@ pw + plot_annotation(
 )
 ```
 
+Albuquerque would seem to have proportionally a higher number of people with college degrees compared to New Mexico, and a higher number of advanced degrees than the rest of the country.
+
 ```{r}
 edu_dist %>% 
   filter(district != "Los Ranchos") %>% 
@@ -669,55 +671,14 @@ edu_dist %>%
   theme(axis.text.y = element_text(size = 6))
 ```
 
-```{r}
-edu_dist_graduate <- edu_dist %>% 
-  group_by(region, sex, education) %>% 
-  summarise(value = sum(value))
+Again, we see significant variation between districts, District 3 notably devoid of any professional or doctoral degrees.
 
-c(edu_dist_graduate, edu_nm_graduate, edu_us_graduate) %<-%
-  map2(list(edu_dist_graduate, edu_nm, edu_us), 
-       c("Albuquerque", "New Mexico", "US"),
-       \(df, region) df %>% mutate(
-          degree = if_else(as.integer(education) <= 3, "No degree", "Degree"),
-          region = region
-       ))
-  
-
-edu_graduate_compare <- rbind(edu_dist_graduate, edu_nm_graduate, edu_us_graduate)
-
-edu_reg_totals <- edu_graduate_compare %>% 
-  group_by(region) %>% 
-  summarise(total = sum(value))
-edu_graduate_percent <- edu_graduate_compare %>% 
-  group_by(region, degree) %>% 
-  summarise(value = sum(value)) %>% 
-  left_join(edu_reg_totals) %>% 
-  mutate(percent = value / total) %>% 
-  select(region, degree, percent)
-
-
-```
-
-```{r}
-edu_graduate_compare %>% 
-  mutate(
-    region = factor(region, 
-                    level = c("US", "New Mexico", "Albuquerque"))
-  ) %>% 
-  compare_plot("degree", "region") +
-  scale_y_continuous(labels = scales::percent) +
-  theme(legend.title = element_blank()) +
-  labs(title = "Percentage with college degrees",
-       subtitle = "Albuquerque, State and Country") 
-```
 
 ```{r}
 edu_dist_cmp <- edu_dist %>% 
   group_by(sex, education) %>% 
   summarise(value = sum(value)) %>% 
   mutate(region = "Albuquerque")
-edu_nm$region = "New Mexico"
-edu_us$region = "US"
 edu_compare <- rbind(edu_dist_cmp, edu_nm, edu_us)
 ```
 
@@ -728,19 +689,12 @@ edu_compare_table <- edu_compare %>%
 
 edu_compare_table %>% 
   print_table(group = "education", title = "**Comparison of Educational Attainment**") %>% 
-  cols_width(everything() ~ px(110))
+  cols_width(education ~ px(190),
+             everything() ~ px(110)) %>% 
+  data_color(palette = "RColorBrewer::RdBu", direction = "row")
 ```
 
-```{r}
-edu_dist_table <- edu_dist %>% 
-  filter(district != "Los Ranchos") %>% 
-  prepare_tables("district", "education") %>% 
-  mutate(education = factor(education, edu_levels)) %>% 
-  rename_with(~ gsub("District", "Dist", .x))
-
-edu_dist_table %>% 
-  print_table(group = "education", title = "**Comparison of Educational Attainment**")
-```
+Again, in each row, dark red represents the lowest value and dark blue the highest. Indeed, Albuquerque has proportionally more advanced degrees than the nation as a whole.
 
 ```{r}
 edu_dist_plt <- edu_dist %>% 
@@ -767,12 +721,29 @@ p2 <- edu_dist_plt %>%
 p1 + p2
 ```
 
+```{r}
+edu_dist_table <- edu_dist %>% 
+  filter(district != "Los Ranchos") %>% 
+  prepare_tables("district", "education") %>% 
+  rename_with(~ gsub("District", "Dist", .x))
 
-# Saving data
+edu_dist_table %>% 
+  print_table(group = "education", 
+              title = "**Comparison of Educational Attainment**") %>% 
+  data_color(palette = "RColorBrewer::RdYlBu", direction = "row", 
+             method = "bin")
+```
+
+As we've seen before, there is extreme variability here. The differences between District 3 and District 8 are particularly stark.
+
+# Conclusion
+
+All cities have neighborhoods which are very different from one another demographically and economically. Whether the amount of variability we saw is "normal" is one question. The next step is to look at the economic indicators such as income, property values, rent and inequality. It will be interesting to see the relationship between those indicators and the demographic information gathered here.
 
 Finally, I will save the data. I have 13 data sets that I want to save into four files, one for each geography. For the US and New Mexico data, I can use R's native format, but for the county and district information, which are `sf` objects, I will use multiple layers in a `gpkg` format file. To make this easy, I can use `walk` and `walk2`. These functions work just like the `map` functions, except that they don't return anything useful. They are used only for "side effects" such as reading, writing, or printing.
 
 ```{r}
+#| output: false
 walk(list(age_sex_us, edu_us, race_us),
      \(df) save(df, file = "data/us_data.rda"))
 
