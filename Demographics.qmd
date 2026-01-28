@@ -14,7 +14,9 @@ execute:
 knitr::opts_chunk$set(message = FALSE, warning = FALSE, paged.print = FALSE)
 ```
 
-I would like to compare the demographics and some key economic data between the city council districts of Albuquerque, as well as comparing Albuquerque to the rest of the state and nation. This will involve obtaining data from `census.gov` as well as local government websites. Since census tracts do not line up with council districts, the census data will need to be interpolated into the council districts.
+# Introduction
+
+I would like to compare the variation in the economic conditions between city council districts in Albuquerque. First, I want to get a sense of the demographics of the city, how they compare the the state and country, and how they vary between the city council districts. To do so, I will get the demographic data from `census.gov` using the `tidycensus` package, and the district lines from local government websites. Since census tracts do not line up with council districts, the census data will need to be interpolated into the council districts.
 
 Throughout, I will emphasize good coding techniques, especially the creation of helper functions to avoid the significant amount of repetition involved in obtaining multiple data sets for three geographical levels.
 
@@ -28,10 +30,12 @@ library(sf)
 library(units)
 library(crsuggest)
 library(gt)
+library(gtExtras)
 library(ggtext)
 library(patchwork)
 library(janitor)
 library(nngeo)
+library(zeallot)
 options(tigris_use_cache = TRUE)
 ```
 
@@ -39,7 +43,7 @@ options(tigris_use_cache = TRUE)
 
 I will start by obtaining the boundaries for the city council districts. The Albuquerque website provides a wealth of data, although it is not necessarily well-structured. In many of the data sets, the relevant data is contained in tables embedded in columns of `html` tables. I'll get to that when I incorporate crime statistics later. In this case, it is useless, as the website only provides councilors' names as a variable, not district numbers, and the names provided are for councilors from several years ago!
 
-Fortunately, the Bernalillo County website provides what's needed, as well as providing the shape for The Village of Los Ranchos de Albuquerque. Los Ranchos is sort of the Beverly Hills of Albuquerque, in the sense that it is a separate municipal enclave (almost) entirely surrounded by Albuquerque, and where many the largest properties and mansions in the area are located.
+Fortunately, the Bernalillo County website provides what's needed, as well as providing the shape for the Village of Los Ranchos de Albuquerque. Los Ranchos is sort of the Beverly Hills of Albuquerque, in the sense that it is a separate municipal enclave (almost) entirely surrounded by Albuquerque, and where many the largest properties and houses in the area are located.
 
 The data portal for Bernalillo County is not very friendly for programmatic downloading, though. My first effort to download and unzip the file containing the city council boundaries failed to produce a usable file. Adding the argument `method = "curl"` allowed me to download the files, however.
 
@@ -55,7 +59,6 @@ I will read the file with `sf::st_read`, which will result in an `sf` object. Th
 council_dists_bc <- st_read("data/BC_CityCouncil/ABQ_CityCouncils.shp") %>%
   select(district = DISTRICTNU) %>%
   mutate(district = paste("District", district))
-council_dists_bc
 ```
 
 I'll do the same for Los Ranchos.
@@ -87,20 +90,16 @@ Now I will bind them and transform the coordinate reference system to a local on
 ```{r}
 council_dists <- rbind(council_dists_bc, los_ranchos) %>%
   st_transform(6528)
-council_dists
 ```
 
-I'll plot the district boundaries with `ggplot`, adding a base map with `ggspatial::annotation_map_tile`. I'll be doing the same map several times, so I'll make a function to do so.
+I'll plot the district boundaries with `ggplot`, adding a base map with `ggspatial::annotation_map_tile`. I'll be doing the same map several times, and this will also provide a base for demographic maps, so I'll make a function to do so.
+
 
 ```{r}
 dist_plot <- function(df) {
   ggplot(df) +
-  annotation_map_tile(
-    type = "osm",
-    cachedir = "~/.cache/maps/",
-    zoomin = -1,
-    alpha = 0.7
-  ) +
+  annotation_map_tile(type = "osm", alpha = 0.7, 
+    zoomin = -1, cachedir = "~/.cache/maps/") +
   geom_sf() +
   theme_void() +
   geom_sf(aes(color = district), fill = NA, linewidth = 1) +
@@ -121,7 +120,7 @@ One thing to note from this map: there are numerous areas of unincorporated Bern
 dist_plot(council_dists %>% filter(district %in% c("District 2", "District 4", "District 5", "Los Ranchos")))
 ```
 
-This will become relevant later as we map the census data onto the districts, as some of the data will lie outside city boundaries. On the other hand, I think it makes sense to fill in the holes in the middle of districts, to minimize the loss of data. I'll use the convenient `st_remove_holes()` function from the `nngeo` package.
+This will become relevant later as we map the census data onto the districts, as some of the data will lie outside city boundaries. I think it makes sense to fill in the holes in the middle of districts, to minimize the loss of data. I'll use the convenient `st_remove_holes()` function from the `nngeo` package.
 
 ```{r}
 council_dists <- st_remove_holes(council_dists)
@@ -140,11 +139,10 @@ dist_plot(council_dists %>% filter(district %in% c("District 2", "District 4", "
 
 #  Basic Demographics
 
-I want to start with some basic demographic information, specifically age, sex, race and education, to see how they compare between council districts. I will use `tidycensus` to download data from `census.gov`, using tables from 2023's five-year American Community Survey. I want tract level data for my study area. I also want to compare to state-wide and country-wide data, so I'll grab those at a less detailed level.
-
-The function to download the data is `get_acs()`, which takes a series of pretty self-explanatory arguments. Once downloaded, quite a bit of processing will be needed to prepare the data for analysis and visualization. I'll start with a function to download the tables, since I will need to do this nine times. When getting country level data, only the `geography` argument is used, state level data requires the state name, and the tract level requires the county name. I only need the geometry for the tract level data.
+I will start with some basic demographic information, specifically age, sex, race and education, to see how they compare between council districts. I will use `tidycensus` to download data from `census.gov`, using tables from 2023's five-year American Community Survey. I want tract level data for my study area. I also want to compare to state-wide and country-wide data, so I'll grab those, but I don't need the geometry. The function to download the data is `get_acs()`, which takes a series of pretty self-explanatory arguments. This entails nine calls to `get_acs()`, each call followed by a lot of processing in preparation for analysis and visualization. Here is a function to do that. I'll create a `year` variable in case I want to re-run with a different data set.
 
 ```{r}
+year <- 2023
 get_tables <- 
   function(geography, table, labels,
            state = NULL, county = NULL,
@@ -156,15 +154,20 @@ get_tables <-
       state = state,
       county = county,
       table = table,
-      year = 2023,
+      year = year,
       geometry = geometry,
       cache_table = T
     ) %>%
-      clean_tables(labels)
+      clean_names() %>% 
+    select(-2) %>% 
+    clean_names() %>% 
+    left_join(labels)
   }
 ```
 
-A lot of the heavy lifting will be down the the `clean_tables` function, which hasn't been written yet. The problem is that the tables contain variable names, which are un-descriptive alpha-numeric strings. For tables and plotting, they are useless. On the other hand, manually changing the names would be terrible. Instead, I'll use `tidycensus::load_variables`, which, in addition to being useful to discover variables, also provides labels for each variable which can be used programmatically. The labels themselves need cleaning, so I'll start with a helper for all this.
+The `geography` will be either "us", "state" or "tract". Depending on the request, the `state` and/or `county` variables will be needed. Note that these have been assigned a default value of `NULL`. I only need an `sf` object for the tract level, as I will be splitting and mapping this data. Finally, I'll drop an unneeded column, use `janitor` to clean the names, and join the labels, which have yet to be defined.
+
+The problem is that the tables contain variable names, which are un-descriptive alpha-numeric strings. For tables and plotting, they are useless. On the other hand, manually changing the names would be terrible. Instead, I'll use `tidycensus::load_variables`, which, in addition to being useful to discover variables, also provides labels for each variable which can be used programmatically. The labels themselves need cleaning, so I'll start with a helper for all this. It cleans up the descriptions, and inserts a `_` where it will later be used to create columns.
 
 ```{r}
 v23 <- load_variables(2023, "acs5")
@@ -183,18 +186,9 @@ get_labels <- function(table) {
 }
 ```
 
-Now I can write the clean tables function, which joins the labels to the data.
+TODO::
 
-```{r}
-clean_tables <- function(df, labels) {
-  df %>% 
-    select(-2) %>% 
-    clean_names() %>% 
-    left_join(labels)
-}
-```
-
-And, finally, the splitting function. For Bernalillo County, I want to be able to split the data by district. To do so, I will first use `st_intersection`, which will create extra rows with new geographies for each subsection of tracts which are divided among districts. The values are not automatically split among the subsections, I must do that manually. Since they are all counts (extensive variables), I will calculate the areal proportion of each subsection, and use these percentages to apportion the values among the subsections.
+Nos I can write the splitting function. For Bernalillo County, I want to be able to split the data by district. To do so, I will first need to calculate the area for each tract. I will then use `st_intersection`, to create rows with new geographies for tracts which are divided among districts. The values are not automatically split among the subsections, I must do that manually. Since they are all counts (extensive variables), I will calculate the areal proportion of each subsection, and use these percentages to apportion the values among the subsections. After that, I no longer need the `geometry`.
 
 ```{r}  
 split_dists <- function(df, vars) {
@@ -203,46 +197,17 @@ split_dists <- function(df, vars) {
     area_split = st_area(.),
     area_pct = area_split / area,
     new_value = as.numeric(round(value * area_pct, 0))
-  ) %>% 
-  st_drop_geometry() %>% 
-  select(all_of(vars)) %>% 
-  arrange(district) %>% 
-  as_tibble()
+  )
 }
 ```
 
 
-## Age and Sex
+# Age and Sex
 
-Now we can start looking at age and sex. I will start by getting the labels for the table variables and download the first dataset. I will use this to set factor levels so that the graphs show the correct order, as well as separating the label into different columns.
+Now we can start looking at age and sex. I will start by using my `get_labels` function to get the labels for the table variables, then download the first dataset. I will set factor levels so that the graphs show the correct order, as well as separating the label into different columns. For the county data, I'll request an `sf` object with `geometry = T`, use the local CRS in meters, and calculate the area of each tract, which I'll need for splitting.
 
 ```{r}
 age_sex_labels <- get_labels("B01001A")
-
-age_sex_nm <- get_tables("state", "B01001A", age_sex_labels) %>% 
-  filter(str_detect(label, "years")) %>% 
-  separate(label, c("sex", "agegroup"), sep = "_") %>% 
-  select(sex, agegroup, value = estimate) %>% 
-  as_tibble()
-
-age_levels <- age_sex_nm %>% 
-  select(agegroup) %>% 
-  unique() %>% 
-  pull()
-
-age_sex_nm <- age_sex_nm %>% 
-  mutate(agegroup = factor(agegroup, age_levels))
-```
-
-Now I can get the rest of the data, and split the county information into districts.
-
-```{r}
-age_sex_us <- get_tables("us", "B01001A", age_sex_labels) %>% 
-  filter(str_detect(label, "years")) %>% 
-  separate(label, c("sex", "agegroup"), sep = "_") %>% 
-  select(sex, agegroup, value = estimate) %>% 
-  as_tibble() %>% 
-  mutate(agegroup = factor(agegroup, age_levels))
 
 age_sex_bern <- get_tables("tract", "B01001A", age_sex_labels, geometry = T) %>% 
   st_transform(6528) %>% 
@@ -250,10 +215,26 @@ age_sex_bern <- get_tables("tract", "B01001A", age_sex_labels, geometry = T) %>%
   filter(str_detect(label, "years")) %>% 
   separate(label, c("sex", "agegroup"), sep = "_") %>% 
   select(geoid, sex, agegroup, value = estimate, area)
+```
 
-age_sex_dist <- age_sex_bern %>% 
-  split_dists(c("geoid", "district", "sex", "agegroup", "value", "new_value", "area_pct")) %>% 
-  mutate(agegroup = factor(agegroup, age_levels))
+Now I can get the rest of the data, and split the county information into districts. Here I'll use `purrr::map()` together with the `%<-%` operator from the `zealot` package. It performs simultaneous destructuring and assignment. `map` takes vectors or lists and performs a function on each, returning a list of the results. The `%<-%` allows for a vector of variable names on the left-hand side, to which will be assigned the elements of the returned list. Rather than defining a named function, I will supply an anonymous or `lambda` function. Note that the `\(x)` syntax is preferred over the old `function()` or `~` style of writing anonymous functions. I'll preserve the `sf` object for future mapping.
+
+```{r}
+c(age_sex_us, age_sex_nm) %<-%
+  map(c("us", "state"),
+      \(x) get_tables(x, "B01001A", age_sex_labels) %>%
+        filter(str_detect(label, "years")) %>% 
+        separate(label, c("sex", "agegroup"), sep = "_") %>% 
+        select(sex, agegroup, value = estimate) %>% 
+        as_tibble() %>% 
+        mutate(agegroup = factor(agegroup, unique(agegroup))))
+
+age_sex_dist_sf <- age_sex_bern %>% 
+  split_dists() %>% 
+  select(geoid, district, sex, agegroup, value, new_value, area_pct) %>% 
+  mutate(agegroup = factor(agegroup, unique(agegroup)))
+
+age_sex_dist <- st_drop_geometry(age_sex_dist_sf)
 ```
 
 For now I'm keeping some variables I don't really need. This will help me evaluate the results of the splitting operation. I am expecting a certain amount of data loss, since parts of some of the tracts lie outside the council districts. I would like to do a visual sanity check to verify that the loss makes sense. I'll look at a small portion to see how much variance there is.
@@ -295,40 +276,58 @@ dist_plot(council_dists) +
 We can see that, in fact, only small portions of the tract are in each of the 2 council districts and Los Ranchos, and that most of the area is outside the city. I'm going to redo the split, dropping the unneeded variables.
 
 ```{r}
-age_sex_dist <- age_sex_bern %>% 
-  split_dists(c("district", "sex", "agegroup", value = "new_value"))
+age_sex_dist_sf <- age_sex_bern %>% 
+  split_dists() %>% 
+  select(district, sex, agegroup, value = "new_value") %>% 
+  mutate(agegroup = factor(agegroup, unique(agegroup)))
+
+age_sex_dist <- st_drop_geometry(age_sex_dist_sf) %>% 
+  as.tibble()
 ```
 
-Now lets plot the results.
+Now lets plot the results. This function requires some special syntax, however. The names of variables used in the function need to be passed as strings, but the function expects "bare" variable names. For grouping, there is the handy `group_by_at()` function, which takes a string as a variable name. Within `ggplot` we need the syntax `.data[["variable"]]`.
 
 ```{r}
 mf_plot <- function(df, groups, pos) {
   df %>% 
-  group_by_at(groups) %>% 
-  summarise(value = sum(value)) %>% 
-  mutate(value = ifelse(sex == "Male", -value, value)) %>% 
-  ggplot(aes(x = value, y = .data[[groups[pos]]], fill = sex)) +
-  geom_col()
+    group_by_at(groups) %>% 
+    summarise(value = sum(value)) %>% 
+    mutate(value = ifelse(sex == "Male", -value, value)) %>% 
+    ggplot(aes(x = value, y = .data[[groups[pos]]], fill = sex)) +
+    geom_col() +
+    theme(axis.ticks = element_blank(),
+          axis.text.x = element_blank(),
+          axis.title.y = element_blank())
 }
 ```
 
 ```{r}
 p1 <- age_sex_us %>%
   mf_plot(c("sex", "agegroup"), pos = 2) +
-  theme(legend.position = "none",
-        axis.ticks = element_blank(),
-        axis.text.x = element_blank()
-        ) +
+  theme(legend.position = "none") +
   xlab("US")
 p2 <- age_sex_nm %>%
   mf_plot(c("sex", "agegroup"), pos = 2) +
-  theme(axis.text.y = element_blank(),
-        axis.title.y = element_blank(),
-        axis.ticks = element_blank(),
-        axis.text.x = element_blank()) +
+  theme(legend.position = "none",
+        axis.text.y = element_blank()) +
   xlab("New Mexico")
-p1 + p2
+
+p3 <- age_sex_dist %>%
+  group_by(sex, agegroup) %>% 
+  summarise(value = sum(value)) %>% 
+  mf_plot(c("sex", "agegroup"), pos = 2) +
+  theme(axis.text.y = element_blank(),
+        legend.title = element_blank()) +
+  xlab("Albuquerque")
+
+pw <- p1 + p2 + p3
+pw + plot_annotation(
+  title = 'Age and Sex Comparison',
+  caption = 'Source: census.gov, acs5, 2023'
+)
 ```
+
+These profiles seem roughly similar, although it does seem that Albuquerque has fewer 15-17 year olds and more 30-34 year-olds than the others. Before looking at the actual numbers, lets compare the districts.
 
 ```{r}
 age_sex_dist %>% 
@@ -337,19 +336,25 @@ age_sex_dist %>%
   facet_wrap(~district) +
   xlab("population") +
   theme(axis.text.y = element_text(size = 6))
-  
 ```
 
-TODO: add a table
+Across the city, on the other hand, there is considerable variability among districts, both in age and sex. It's time to look at the numbers. To do this, I will first combine the data into a single data frame. I need to first assign a `region` to each of the three tibbles. For this I'll use `map2`, which takes an additional vector argument. I'll use `%<-%` to assign the results back to replace the original data frames.
+
 ```{r}
 age_sex_cmp <- age_sex_dist %>% 
   group_by(sex, agegroup) %>% 
-  summarise(value = sum(value)) %>% 
-  mutate(region = "Albuquerque")
-age_sex_nm$region = "New Mexico"
-age_sex_us$region = "US"
+  summarise(value = sum(value))
+
+c(age_sex_cmp, age_sex_nm, age_sex_us) %<-% map2(
+  list(age_sex_cmp, age_sex_nm, age_sex_us), 
+  c("Albuquerque", "New Mexico", "US"),
+  \(df, region) df %>% mutate(region = region)
+)
+
 age_sex_compare <- rbind(age_sex_cmp, age_sex_nm, age_sex_us)
 ```
+
+I will use the `gt` package for the tables. First I need to pivot the data so I have columns for each region or district. I also want to use percentages instead of raw numbers, so I'll calculate that. Like before, I'll use the special syntax.
 
 ```{r}
 prepare_tables <- function(df, group, variable) {
@@ -366,51 +371,58 @@ prepare_tables <- function(df, group, variable) {
                 values_from = percent) %>%
     ungroup()
 }
+```
 
+And now, a base table function.
+
+```{r}
 print_table <- function(df, group, title) {
   df %>% 
     arrange(.data[[group]]) %>% 
   gt(rowname_col = group) %>%
-  fmt_percent(columns = everything(), decimals = 0) %>%
+  fmt_percent(columns = everything(), decimals = 1) %>%
   tab_style(style = cell_text(align = "center"),
             locations = cells_column_labels(columns = everything())) %>%
-  tab_header(
-    title = md(title)
-  ) %>%
-  tab_source_note(
-    source_note = md("*Source: census.gov, acs5, 2023*")
-  ) %>%
+  tab_header(title = md(title)) %>%
+  opt_align_table_header(align = "center") %>% 
+  tab_source_note(source_note = md("*Source: census.gov, acs5, 2023*")) %>%
   tab_style(style = cell_text(align = "right"),
-            locations = cells_source_notes()) %>%
-  opt_stylize(style = 2)
+            locations = cells_source_notes()) %>% 
+  gt_theme_espn() %>% 
+  opt_align_table_header(align = "center") %>% 
+  cols_align(align = "center", columns = everything())
 }
 ```
 
 ```{r}
 age_sex_compare %>% 
   prepare_tables("region", "agegroup") %>% 
-  mutate(agegroup = factor(agegroup, age_levels)) %>% 
+  mutate(agegroup = factor(agegroup, unique(agegroup))) %>% 
   print_table(group = "agegroup", title = "**Comparison of Agegroups**") %>% 
-  cols_width(everything() ~ px(110))
+  cols_width(agegroup ~ px(155),
+             everything() ~ px(110))
 ```
+
+Albuquerque seems to have less teens than the national average, while having more 25-44 year olds. Lets compare by district.
 
 ```{r}
 age_sex_dist %>% 
   filter(district != "Los Ranchos") %>% 
+  mutate(district = str_replace(district, "District", "Dist")) %>% 
   prepare_tables("district", "agegroup") %>% 
-  mutate(agegroup = factor(agegroup, age_levels)) %>% 
-  rename_with(~ gsub("District", "Dist", .x)) %>% 
-  print_table(group = "agegroup", title = "**Comparison of Agegroups**")
+  mutate(agegroup = factor(agegroup, unique(agegroup))) %>% 
+  print_table(group = "agegroup", title = "**Comparison of Agegroups**") %>% 
+  data_color(palette = "RColorBrewer::RdYlBu", direction = "row", 
+             domain = c(.01, .17), method = "bin")
 ```
 
+There is, indeed, a lot of variability across districts. Only 2.8% of those in District 2 are 5-9 years old, while the number is 8.0% in District 3. On the other hand, a mere 17.8% in District 3 are 55 years or older, while 36.5% of District 2 is in this category, and District 8 has 41.9%. This high level of variability deserves further study, and could likely prove useful when looking at economic differences between the districts.
 
-## Race
+# Race
 
-I'll start with a function to clean the race tables. Unlike the former data set, the labels need some cleanup for plotting purposes. Note the conditional block where the `.` is required in the `select` statement.
+I'll start with a function to clean the race tables. Unlike the former data set, the labels need some cleanup for plotting purposes. Note the conditional block where the `.` is required in the `select` statement. This ensures that the `area` field is selected for the tract level data.
 
 ```{r}
-#| collapse: false
-
 race_labels <- get_labels("B03002")
 
 race_clean <- function(df, area) {
@@ -434,13 +446,12 @@ race_clean <- function(df, area) {
 Now I can get and process the data as before.
 
 ```{r}
-race_us <- get_tables("us", "B03002", race_labels) %>% 
-  race_clean(area = FALSE) %>% 
-  mutate(region = "US")
-
-race_nm <- get_tables("state", "B03002", race_labels) %>% 
-  race_clean(area = FALSE) %>% 
-  mutate(region = "New Mexico")
+c(race_us, race_nm) %<-%
+  map2(c("us", "state"),
+       c("US", "New Mexico"),
+       \(geography, region) get_tables(geography, "B03002", race_labels) %>% 
+        race_clean(area = FALSE) %>% 
+        mutate(region = region))
 
 race_bern <- get_tables("tract", "B03002", race_labels, geometry = TRUE) %>% 
   st_transform(6528) %>% 
@@ -448,17 +459,18 @@ race_bern <- get_tables("tract", "B03002", race_labels, geometry = TRUE) %>%
   race_clean(area = T) %>% 
   mutate(region = "Bernalillo")
 
-race_dist <- race_bern %>% 
-  split_dists(c("district", "hisp", "race", "value")) %>% 
+race_dist_sf <- race_bern %>% 
+  split_dists() %>% 
+  select(district, hisp, race, value = "new_value") %>% 
   mutate(region = "Albuquerque")
+
+race_dist <- st_drop_geometry(race_dist_sf)
 ```
 
-I'll prepare the datasets for plotting. I'm going to remove two race categories for plotting purposes, both with minimal presence in New Mexico. I will use `purrr:map` and the `zeallot`'s `%<-%` operator to filter both datasets with one command. The `%<-%` operator is used to unpack the data frames from the list returned by the `map` function.
+I'll prepare the datasets for plotting. I'm going to remove two race categories for plotting purposes, both with minimal presence in New Mexico.
 
 ```{r}
-library(zeallot)
-# race_bern <- race_bern %>% st_drop_geometry() %>% select(-area)
-race_compare <- rbind(race_dist %>% select(-1), race_us, race_nm)
+race_compare <- rbind(race_dist %>% select(hisp, race, value, region), race_us, race_nm)
 
 c(race_compare_plt, race_dist_plt) %<-% 
   map(list(race_compare, race_dist), 
@@ -467,13 +479,9 @@ c(race_compare_plt, race_dist_plt) %<-%
                      race != "Native Hawaiian and Other Pacific Islander")))
 ```
 
-In this case, I will forgo writing a plotting function, even though it seems repetitive. There are so many minor differences between the plots that such a function would be tedious and over complicated.
-
+I will write a function for a bar graph.
 
 ```{r}
-race_compare_plt <- race_compare_plt %>% 
-  mutate(region = factor(region, level = c("US", "New Mexico", "Albuquerque")))
-
 compare_plot <- function(df, fill, x_var, position = "fill") {
   df %>% 
     ggplot(aes(x = .data[[x_var]], 
@@ -481,9 +489,19 @@ compare_plot <- function(df, fill, x_var, position = "fill") {
            fill = .data[[fill]])) +
     geom_col(position = position) +
     scale_fill_viridis_d() +
-    theme(axis.title = element_blank()) +
-    labs(caption = "Source: census.gov, 2023")
+    theme(axis.title = element_blank())
 }
+```
+
+
+
+```{r}
+race_compare_plt <- race_compare_plt %>% 
+  mutate(region = factor(region, level = c("US", "New Mexico", "Albuquerque")))
+
+race_dist_plt <- race_dist_plt %>% 
+  filter(district != "Los Ranchos") %>% 
+  mutate(district = str_replace(district, "District", "Dist"))
 
 race_compare_plt %>% 
   compare_plot("race", "region") +
@@ -493,6 +511,7 @@ race_compare_plt %>%
        fill = "Selected Races")
 ```
 
+New Mexico has few Black and Asian residents, but unsurprisingly a much larger percentage of Native Americans. These differences are somewhat less in Albuquerque itself. Both have a large percentage of people saying 2 or more races. This is likely due to many people considering "Hispanic" to be a different racial designation than "White".
 
 ```{r}
 p1 <- race_dist_plt %>% 
@@ -508,19 +527,25 @@ p2 <- race_dist_plt %>%
   scale_y_continuous(labels = scales::comma) +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
   labs(subtitle = "Population",
-       fill = "Selected Races")  
+       fill = "Selected Races",
+       caption = "Source: census.gov, 2023")  
 
 p1 + p2
 ```
 
+District 6 shows the greatest racial diversity, while district 3 shows the least. District 6 shows the largest percentage of people claiming two or more races. Let's compare Hispanic to non-Hispanic.
 
 ```{r}
 race_compare_plt %>% 
   compare_plot("hisp", "region") +
   scale_y_continuous(labels = scales::percent) +
   labs(title = "Hispanic Comparison",
-       subtitle = "Albuquerque, State and Country")
+       subtitle = "Albuquerque, State and Country",
+       caption = "Source: census.gov, 2023",
+       fill = "")
 ```
+
+New Mexico has the largest Hispanic population by percentage in the country, so these results are hardly surprising. The district breakdown will be more interesting. 
 
 ```{r}
 p1 <- race_dist_plt %>% 
@@ -536,62 +561,29 @@ p2 <- race_dist_plt %>%
   scale_y_continuous(labels = scales::comma) +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
         legend.title = element_blank()) +
-  labs(subtitle = "Population")
+  labs(subtitle = "Population",
+       caption = "Source: census.gov, 2023")
 
 p1 + p2
 ```
 
-There is a high degree of variability across Albuquerque, with some districts very heavily hispanic, such as the third district, and some not, such as the eighth. This is worth plotting on a map to get an idea where these districts are.
+There is a high degree of variability across Albuquerque, with some districts very heavily Hispanic, such as the third district, and some not, such as the eighth. The high level of Hispanics in district 3, combined with the fact that this district also has the highest proportion of those who identify as two more more races, lends support to my hypothesis that this group are Hispanic Whites.
 
-
-```{r}
-district_population <- race_dist_plt %>% 
-  group_by(district) %>% 
-  summarise(pop = sum(value))
-
-race_dist_sf <- race_dist_plt %>% 
-  filter(hisp == "Hispanic") %>% 
-  group_by(district) %>% 
-  summarise(value = sum(value)) %>% 
-  left_join(council_dists) %>% 
-  st_as_sf() %>% 
-  left_join(district_population) %>% 
-  mutate(hisp_pct = 100 * value / pop)
-
-
-
-dist_plot(council_dists) +
-  geom_sf(data = race_dist_sf, aes(fill = value), alpha = 0.4) +
-  scale_fill_viridis_c("Hispanic\nPopulation") +
-  guides(color = "none")
-```
-
-```{r}
-dist_plot(council_dists) +
-  geom_sf(data = race_dist_sf, aes(fill = hisp_pct), alpha = 0.4) +
-  scale_fill_viridis_c("Hispanic\nPercent") +
-  guides(color = "none")
-```
-
-
-
-## Education
-
+# Education
 
 ```{r}
 edu_labels <- get_labels("B15002")
 
-edu_us <- get_tables("us", "B15002", edu_labels) %>% 
+edu_bern <- get_tables("tract", "B15002", edu_labels, geometry = T) %>% 
   filter(str_detect(label, "_")) %>% 
   separate(label, c("sex", "education"), sep = "_") %>% 
-  select(sex, education, value = estimate)
+  select(geoid, sex, education, value = estimate) %>% 
+  st_transform(6528) %>% 
+  mutate(area = st_area(.))
 
-edu_levels <- edu_us %>% 
-  select(education) %>% 
-  unique() %>% 
-  pull()
+edu_levels <- unique(edu_bern$education)
 
-edu_levels <- c("No HS Diploma", "High school graduate", "Some college", edu_levels[-(1:11)])
+edu_levels <- c("No HS Diploma", "High school graduate", edu_levels[-(1:11)])
 
 simplify_education <- function(df) {
   df %>% 
@@ -607,53 +599,36 @@ simplify_education <- function(df) {
         education == "12th grade, no diploma"
         ~ "No HS Diploma",
       education == "Some college, 1 or more years, no degree" |
-        education == "Some college, less than 1 year"
-        ~ "Some college",
-      education == "High school graduate (includes equivalency)"
+        education == "Some college, less than 1 year" |
+        education == "High school graduate (includes equivalency)"
         ~ "High school graduate",
       TRUE ~ education
       )
     ) %>%
-    {
-      if ("district" %in% names(.)) group_by(., district, sex, education) 
-      else group_by(., sex, education)
-    } %>% 
-    summarise(value = sum(value)) %>% 
-   
-  mutate(education = factor(education, edu_levels))
+    mutate(education = factor(education, edu_levels))
 }
 
-
-edu_us <- edu_us %>% 
+edu_bern <- edu_bern %>% 
   simplify_education()
 ```
 
 ```{r}
+c(edu_us, edu_nm) %<-%
+  map2(c("us", "state"),
+       c("US", "New Mexico"),
+      \(x, y) get_tables(x, "B15002", edu_labels) %>%
+        filter(str_detect(label, "_")) %>% 
+        separate(label, c("sex", "education"), sep = "_") %>% 
+        select(geoid, sex, education, value = estimate) %>% 
+        simplify_education() %>% 
+        mutate(region = y))
 
-# edu_us <- get_tables_us("B15002", edu_labels) %>% 
-#   st_drop_geometry() %>% 
-#   filter(str_detect(label, "_")) %>% 
-#   separate(label, c("sex", "education"), sep = "_") %>% 
-#   select(sex, education, value = estimate) %>% 
-#   simplify_education() %>% 
-#   mutate(education = factor(education, edu_levels))
+edu_dist_sf <- edu_bern %>% 
+  split_dists() %>% 
+  select(district, sex, education, value = "new_value") %>% 
+  mutate(region = "Albuquerque")
 
-edu_nm <- get_tables("state", "B15002", edu_labels) %>% 
-  filter(str_detect(label, "_")) %>% 
-  separate(label, c("sex", "education"), sep = "_") %>% 
-  select(geoid, sex, education, value = estimate) %>% 
-  simplify_education()
-
-edu_bern <- get_tables("tract", "B15002", edu_labels, geometry = T) %>% 
-  filter(str_detect(label, "_")) %>% 
-  separate(label, c("sex", "education"), sep = "_") %>% 
-  select(geoid, sex, education, value = estimate) %>% 
-  st_transform(6528) %>% 
-  mutate(area = st_area(.))
-
-edu_dist <- edu_bern %>% 
-  split_dists(c("district", "sex", "education", "value")) %>% 
-  simplify_education()
+edu_dist <- st_drop_geometry(edu_dist_sf)
 ```
 
 I can use the `mf_plot` function I created earlier, and add the appropriate labels.
@@ -661,36 +636,31 @@ I can use the `mf_plot` function I created earlier, and add the appropriate labe
 ```{r}
 p1 <- edu_us %>%
   mf_plot(c("sex", "education"), 2) +
-  theme(legend.position = "none",
-        axis.ticks = element_blank(),
-        axis.text.x = element_blank()
-        ) +
+  theme(legend.position = "none") +
   xlab("US")
 p2 <- edu_nm %>%
-  mutate(education = factor(education, edu_levels)) %>% 
   mf_plot(c("sex", "education"), 2) +
-  theme(axis.text.y = element_blank(),
-        axis.title.y = element_blank(),
-        axis.ticks = element_blank(),
-        axis.text.x = element_blank()) +
+  theme(legend.position = "none",
+        axis.text.y = element_blank()) +
   xlab("New Mexico")
-p1 + p2
+p3 <- edu_dist %>%
+  group_by(sex, education) %>% 
+  summarise(value = sum(value)) %>% 
+  mf_plot(c("sex", "education"), pos = 2) +
+  theme(axis.text.y = element_blank(),
+        legend.title = element_blank()) +
+  xlab("Albuquerque")
+
+pw <- p1 + p2 + p3
+pw + plot_annotation(
+  title = 'Educational Attainment',
+  caption = 'Source: census.gov, acs5, 2023'
+)
 ```
 
 ```{r}
-edu_dist <- edu_dist %>% 
-  filter(district != "Los Ranchos")
-
 edu_dist %>% 
-  mf_plot(c("district", "sex", "education"), 3) +
-  labs(x = "Population",
-       title = "Educational attainment in Albuquerque",
-       subtitle = "By district") +
-  theme(axis.text.y = element_text(size = 6))
-```
-
-```{r}
-edu_dist %>% 
+  filter(district != "Los Ranchos") %>% 
   mf_plot(c("district", "sex", "education"), 3) +
   facet_wrap(~district) +
   labs(x = "Population",
@@ -700,18 +670,32 @@ edu_dist %>%
 ```
 
 ```{r}
-edu_us_graduate <- edu_us %>% 
-  mutate(degree = if_else(as.integer(education) <= 3, "No degree", "Degree"),
-         region = "US")
-edu_nm_graduate <- edu_nm %>% 
-  mutate(degree = if_else(as.integer(education) <= 3, "No degree", "Degree"),
-         region = "New Mexico")
 edu_dist_graduate <- edu_dist %>% 
-  group_by(sex, education) %>% 
-  summarise(value = sum(value)) %>% 
-  mutate(degree = if_else(as.integer(education) <= 3, "No degree", "Degree"),
-         region = "Albuquerque")
+  group_by(region, sex, education) %>% 
+  summarise(value = sum(value))
+
+c(edu_dist_graduate, edu_nm_graduate, edu_us_graduate) %<-%
+  map2(list(edu_dist_graduate, edu_nm, edu_us), 
+       c("Albuquerque", "New Mexico", "US"),
+       \(df, region) df %>% mutate(
+          degree = if_else(as.integer(education) <= 3, "No degree", "Degree"),
+          region = region
+       ))
+  
+
 edu_graduate_compare <- rbind(edu_dist_graduate, edu_nm_graduate, edu_us_graduate)
+
+edu_reg_totals <- edu_graduate_compare %>% 
+  group_by(region) %>% 
+  summarise(total = sum(value))
+edu_graduate_percent <- edu_graduate_compare %>% 
+  group_by(region, degree) %>% 
+  summarise(value = sum(value)) %>% 
+  left_join(edu_reg_totals) %>% 
+  mutate(percent = value / total) %>% 
+  select(region, degree, percent)
+
+
 ```
 
 ```{r}
@@ -756,5 +740,53 @@ edu_dist_table <- edu_dist %>%
 
 edu_dist_table %>% 
   print_table(group = "education", title = "**Comparison of Educational Attainment**")
+```
+
+```{r}
+edu_dist_plt <- edu_dist %>% 
+  filter(district != "Los Ranchos") %>%
+  mutate(education = fct_rev(education))
+  
+
+p1 <- edu_dist_plt %>% 
+  compare_plot("education", "district") +
+  scale_y_continuous(labels = scales::percent) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+        legend.position = "none") +
+  labs(title = "Educational Attainment by District",
+       subtitle = "Percentage")
+  
+p2 <- edu_dist_plt %>% 
+  compare_plot("education", "district", position = "stack") +
+  scale_y_continuous(labels = scales::comma) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+  labs(subtitle = "Population",
+       fill = "",
+       caption = "Source: census.gov, 2023")  
+
+p1 + p2
+```
+
+
+# Saving data
+
+Finally, I will save the data. I have 13 data sets that I want to save into four files, one for each geography. For the US and New Mexico data, I can use R's native format, but for the county and district information, which are `sf` objects, I will use multiple layers in a `gpkg` format file. To make this easy, I can use `walk` and `walk2`. These functions work just like the `map` functions, except that they don't return anything useful. They are used only for "side effects" such as reading, writing, or printing.
+
+```{r}
+walk(list(age_sex_us, edu_us, race_us),
+     \(df) save(df, file = "data/us_data.rda"))
+
+walk(list(age_sex_nm, edu_nm, race_nm),
+     \(df) save(df, file = "data/nm_data.rda"))
+
+walk2(list(age_sex_bern, edu_bern, race_bern),
+      c("age_sex_bern", "edu_bern", "race_bern"),
+      \(df, level) st_write(df, "data/bern_data.gpkg",
+                            layer = level, append = F))
+
+walk2(list(age_sex_dist_sf, edu_dist_sf, race_dist_sf, council_dists),
+      c("age_sex_dist", "edu_dist", "race_dist", "council_dists"),
+      \(df, level) st_write(df, "data/abq_data.gpkg",
+                        layer = level, append = F))
 ```
 
