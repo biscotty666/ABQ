@@ -13,12 +13,16 @@
       devtools
       geofacet
       geojsonsf
+      ggsci
       ggspatial
       ggtext
+      ggthemes
       gt
+      gtExtras
       janitor
       nngeo
       pagedown
+      paletteer
       patchwork
       prettymapr
       rnaturalearth
