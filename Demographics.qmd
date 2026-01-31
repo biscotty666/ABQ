@@ -1,5 +1,6 @@
 ---
 title: "Albuquerque Demographics"
+subtitle: "Exploring census data with R"
 format: 
   html:
     code-overflow: wrap
@@ -19,9 +20,9 @@ knitr::opts_chunk$set(message = FALSE, warning = FALSE, paged.print = FALSE)
 
 # Introduction
 
-I would like to compare the economic conditions between the city council districts of Albuquerque. To start, I want to get a sense of the demographics of the city, how they compare the the state and country, and how they vary between the districts. To do so, I will get the demographic data from `census.gov` using the `tidycensus` package, and the district lines from local government websites. Since census tracts do not line up with council districts, the census data will need to be interpolated into the council districts.
+I would like to compare the economic conditions of people in different city council districts of Albuquerque. To start, though, I want to get a sense of the basic demographics of the city, both how they compare the the state and country, and how they vary between the districts. To do so, I will get demographic data from `census.gov` using the `tidycensus` package, and I will get the district lines from local government websites. Since census tracts do not line up with council districts, the census data will need to be apportioned between the council districts.
 
-Data analysis inevitably involves repeating the same thing with minor changes or updates. Throughout, I will emphasize good coding techniques, including the creation of helper functions and the use of `purrr`'s functional  to avoid the significant amount of repetition involved in, for example, obtaining and processing multiple data sets for multiple geographical levels. I will also show how `zealot`'s `%<-%` operator, when paired with `map`, results in concise and elegant code.
+The other purpose of this article is to demonstrate efficient coding techniques. Data analysis inevitably involves repeating the same thing with minor changes or updates over and over. I will show the value of writing helper functions, and the special syntax often needed with, eg. `dyplr` functions. I'll also show how to use `purrr`'s `map` family functions and how to use them with the `%<-%` operator from the `zeallot` package. This combination results in clear, concise functional expressions very reminiscent of Haskell.
 
 :::{.callout-note appearance="minimal" title="Libraries" collapse="true"}
 
@@ -48,9 +49,9 @@ options(tigris_use_cache = TRUE)
 
 # City Council Districts
 
-I will start by obtaining the boundaries for the city council districts. The Albuquerque website provides a wealth of data, although it is not necessarily well-structured. In many of the data sets, the relevant data is contained in tables embedded in columns of `html` tables. I'll get to that when I incorporate crime statistics later. In this case, it is useless, as the website only provides councilors' names as a variable, not district numbers, and the names provided are for councilors from several years ago!
+I will start by obtaining the boundaries for the city council districts. The Albuquerque website provides a wealth of data, although it is not necessarily well-structured. In many of the data sets, the relevant data is contained in a single columns of `html`, from which the tables need to be extracted. I'll get to that when I incorporate crime statistics later. This case is even worse, as the website's council district table only provides councilors' names as a variable, not district numbers. And the names provided are for councilors from several years ago!
 
-Dealing with local government data portals is always hit and miss. Fortunately, the Bernalillo County website provides what's needed, as well as providing the shape for the Village of Los Ranchos de Albuquerque. Los Ranchos is sort of the Beverly Hills of Albuquerque, in the sense that it is a separate municipal enclave (almost) entirely surrounded by Albuquerque, and where many the larger properties and houses in the area are located.
+Dealing with local government data portals is hit and miss. Fortunately, the Bernalillo County website provides whatI need, as well as providing the shape for the Village of Los Ranchos de Albuquerque. Los Ranchos is sort of the Beverly Hills of Albuquerque, in the sense that it is a separate municipal enclave (almost) entirely surrounded by Albuquerque, and where many the larger properties and houses in the area are located.
 
 The data portal for Bernalillo County is _not_ very friendly for programmatic downloading, though. My first effort to download and unzip the file containing the city council boundaries failed to produce a usable file. Adding the argument `method = "curl"` allowed me to download the files, however.
 
@@ -65,7 +66,7 @@ unzip("data/bernalillo.zip", overwrite = T)
 I will read the file with `sf::st_read`, which will result in an `sf` object. The only variable I'm interested in is the district number, so I'll just grab that, fix the variable name, and make the content more descriptive for easy mapping. The `geometry` is sticky, so I don't need to specify it.
 
 ```{r}
-council_dists_bc <- 
+council_dists <- 
   st_read("data/BC_CityCouncil/ABQ_CityCouncils.shp") %>%
   select(district = DISTRICTNU) %>%
   mutate(district = paste("District", district))
@@ -73,10 +74,10 @@ council_dists_bc <-
 
 I'll do the same for Los Ranchos.
 
-:::{.callout-note appearance="minimal" title="Show code" collapse="true"}
-
 ```{r}
 #| eval: false
+#| code-fold: true
+#| code-summary: "Show the code"
 download.file(
   "https://www.berncoclerk.gov/wp-content/uploads/2023/02/LosRanchos.zip", 
   "data/test.zip", method = "curl")
@@ -84,19 +85,18 @@ unzip("data/LosRanchos.zip")
 ```
 
 ```{r}
-#| output: false
+#| code-fold: true
+#| code-summary: "Show the code"
 los_ranchos <- 
   st_read("data/LosRanchos/LosRanchos.shp") %>%
   select(district = Name)
 ```
 
-:::
-
 Now I will bind them and transform the coordinate reference system to a local one in meters.
 
 ```{r}
 council_dists <- 
-  rbind(council_dists_bc, los_ranchos) %>%
+  rbind(council_dists, los_ranchos) %>%
   st_transform(6528)
 ```
 
@@ -105,12 +105,12 @@ council_dists <-
 The `crsuggest` package has a useful function to determine an appropriate coordinate reference system. 
 
 ```{r}
-suggest_crs(council_dists_bc) %>% head(2)
+suggest_crs(council_dists) %>% head(2)
 ```
 
 :::
 
-I'll plot the district boundaries with `ggplot`, adding a base map with `ggspatial::annotation_map_tile`. I'll be doing the same map several times, and this will also provide a base for demographic maps, so I'll make a function to do so.
+I'll plot the district boundaries with `ggplot`, adding a base map with `ggspatial::annotation_map_tile`. I'll be doing the same map several times, and this will also provide a foundation for later demographic maps, so I'll make a function to do so.
 
 
 ```{r}
@@ -133,12 +133,13 @@ dist_plot <- function(df) {
 dist_plot(council_dists)
 ```
 
-One thing to note from this map: there are numerous areas of unincorporated Bernalillo County which lie inside Albuquerque's borders but do not pertain to any city district. A closer look reveals some of these holes.
+One thing to notice on this map: there are numerous areas of unincorporated Bernalillo County which lie inside Albuquerque's borders but do not pertain to any city district. A closer look reveals some of these holes, in what are not simple POLYGONs.
 
 ```{r abq-demo-acd-2}
-dist_plot(council_dists %>% 
-            filter(district %in% c("District 2", "District 4", 
-                                   "District 5", "Los Ranchos")))
+council_dists %>% 
+  filter(district %in% c("District 2", "District 4",
+                         "District 5", "Los Ranchos")) %>% 
+  dist_plot()
 ```
 
 This will become relevant later as we map the census data onto the districts, as some of the data will lie outside city boundaries. I think it makes sense to fill in the holes in the middle of districts, however. I'll use the convenient `st_remove_holes()` function from the `nngeo` package.
@@ -154,17 +155,19 @@ dist_plot(council_dists)
 ```
 
 ```{r abq-demo-acd-4}
-dist_plot(council_dists %>% 
-            filter(district %in% c("District 2", "District 4", 
-                                   "District 5", "Los Ranchos")))
+council_dists %>% 
+  filter(
+    district %in% c("District 2", "District 4",
+                    "District 5", "Los Ranchos")) %>% 
+  dist_plot()
 ```
 
 
 # Working with census data
 
-I will start with some basic demographic information, specifically age, sex, race and education, to see how they compare between council districts. I will use `tidycensus` to download data from `census.gov`, using tables from 2023's five-year American Community Survey. I want census tract level data for my study area, and I need an `sf` object with geometry in order to divide the data between the council districts. I also want to compare to state-wide and country-wide data, so I'll grab those, but I don't need the geometry, since I won't be mapping the data.
+Now I want to look at age, sex, race and education in Albuquerque. I will use `tidycensus` to download data from `census.gov`, using tables from 2023's five-year American Community Survey. I need census tract level data for my study area, and I need the geometries in order to divide the data between the council districts. I also want to compare to state-wide and country-wide data, so I'll grab that data as well. I don't need the geometry in those cases, since I won't be mapping or splitting that data.
 
-The function to download the data is `get_acs()`, which takes a series of pretty self-explanatory arguments. This entails nine calls to `get_acs()`, each call followed by a lot of processing in preparation for analysis and visualization. Here is a function to do that. I'll create a `year` variable in case I want to re-run with a different year.
+`tidycensus` provides the `get_acs` function to download the survey data. It takes a series of pretty self-explanatory arguments. I'll do this many times for different tables, so here is a function to do that. I'll also create `year` variable in case I want to re-run this with a different year.
 
 ```{r}
 year <- 2023
@@ -190,12 +193,12 @@ get_tables <-
   }
 ```
 
-The `geography` will be either "us", "state" or "tract". Depending on the request, the `state` and/or `county` variables will be needed. Note that these have been initialized with a default value of `NULL`. I only need an `sf` object for the tract level, as I will be splitting and mapping this data, so I'll make that an argument. Finally, I'll drop an unneeded column, use `janitor` to clean the names, and join the labels, which have yet to be defined.
+The `geography` will be either "us", "state" or "tract". Depending on the level, the `state` and/or `county` variables will be needed. Note that these have been initialized with a default value of `NULL`. I will need an `sf` object for the tract level, as I will be splitting and mapping this data, so I'll pass that as an argument as well. Finally, I'll drop an unneeded column, use `janitor` to clean the names, and join the labels, which have yet to be defined.
 
-One problem is that the tables contain variable "names", which are actually un-descriptive alpha-numeric strings. For tables and plotting, they are useless. On the other hand, manually changing the names would be unacceptably tedious. Instead, I'll use `tidycensus::load_variables`, which, in addition to being useful to discover variables, also provides labels which can be used programmatically. The labels themselves need cleaning, so I'll start with a helper for all this. It cleans up the descriptions, and inserts a `_` where it will later be used to create discrete columns.
+One problem with the census tables is that they contain variable "names", which are actually un-descriptive alpha-numeric strings. For tables, plotting, and just exploring data, they are useless. On the other hand, manually changing the names would be unacceptably tedious. Instead, I'll use `tidycensus::load_variables`, which, in addition to being useful to find the variables you want using `View`, also provides labels which can be used programmatically. The labels themselves need cleaning, though. This function cleans up the descriptions and inserts a `_` where it will later be used to create discrete columns for sex and age group.
 
 ```{r}
-acs_vars <- load_variables(2023, "acs5")
+acs_vars <- load_variables(year, "acs5")
 
 get_labels <- function(table) {
   acs_vars %>% 
@@ -211,7 +214,7 @@ get_labels <- function(table) {
 }
 ```
 
-Finally, I will write the splitting function. For the tract-level data for Bernalillo County, I want to be able to divide the data by district. To do so, I will first need to calculate the area for each tract. I will then use `st_intersection`, which will create rows with separate geographies for those tracts which are divided among multiple districts. The values associated with each tract are not automatically split among the subsections, so I must do that manually. Since they are all counts (extensive variables), I will calculate the areal proportion of each subsection, and use these percentages to apportion the values among the subsections.
+Finally, I will write the splitting function. For the tract-level data for Bernalillo County, I want to be able to divide the data by district. To do so, I will first need to calculate the area for each tract. I can do this when I download the data. I will then use `st_intersection`, which will create new rows with separate geographies for those tracts which are divided among multiple districts. The values associated with each tract are not automatically split among the subsections, so I must do that manually. Since they are all counts (extensive variables), I will calculate the areal proportion of each subsection, and use these percentages to apportion the values among the subsections.
 
 ```{r}  
 split_dists <- function(df, vars) {
@@ -227,7 +230,7 @@ split_dists <- function(df, vars) {
 
 # Age and Sex
 
-Now I can start looking at age and sex. I will start by using my `get_labels` function to get the labels for the table variables, then download the first dataset. I will set factor levels so that the graphs show the correct order, as well as separating the label into different columns. For the county data, I'll request an `sf` object with `geometry = T`, use the local CRS in meters, and calculate the area of each tract, which I'll need for splitting.
+I can finally start looking at the demographic data, starting with age and sex. I will use my `get_labels` function to get the labels for the table variables, then download the first dataset. I will set factor levels so that the graphs show the correct order, as well as separating the label into different columns. For the county data, I'll request an `sf` object with `geometry = T`, use the local CRS in meters, and calculate the area of each tract, which I'll need for splitting.
 
 ```{r}
 age_sex_labels <- get_labels("B01001A")
@@ -241,7 +244,7 @@ age_sex_bern <-
   select(geoid, sex, agegroup, value = estimate, area)
 ```
 
-Now I can get the national and state data. Here I'll use `purrr::map()` together with the `%<-%` operator from the `zealot` package. For people with a functional programming bent, this is a match made in heaven. It simultaneously destructures the lists returned by `map` and assigns them to multiple variables specified on the left hand side.
+Now I can get the national and state data. Here I'll use `purrr::map()` together with the `%<-%` operator from the `zeallot` package. For people with a functional programming bent, this is a match made in heaven. It simultaneously destructures the lists returned by `map` and assigns them to multiple variables specified on the left hand side.
 
 Rather than defining a named function, I will supply an anonymous or `lambda` function to `map`. Note that the `\(x)` syntax is preferred now over the old `function()` or `~` style of writing anonymous functions. I'll preserve the `sf` object for future mapping.
 
@@ -295,8 +298,6 @@ dist_plot(council_dists) +
           fill = NA, linewidth = 0.5) +
   geom_sf(data = age_sex_bern %>% filter(geoid == 35001003501), 
           color = "red", fill = NA, linewidth = 2) +
-  scale_fill_viridis_c() +
-  theme_void() +
   guides(color = "none") +
   xlim(460000, 470000) +
   ylim(455000, 465000)
@@ -316,7 +317,7 @@ age_sex_dist <- st_drop_geometry(age_sex_dist_sf) %>%
   as.tibble()
 ```
 
-Now I will write a function to plot the results. This function requires some special syntax, however. The names of variables used in a function need to be passed as strings, but `dplyr` functions usually expect "bare" column names. Therefore, some special syntax is required when writing functions. For grouping, there is the handy `group_by_at()` function, which takes a string as a variable name. Within `ggplot`, and other functions, we need a special syntax `.data[["variable"]]`.
+Now I will write a function to plot the results. This function requires some special syntax, however, since many `tidyverse` functions use bare column names rather than strings, eg `select(column)` instead of `select("column")`. This is problematic when using these functions within other functions, because those column names must be passed as string arguments to the outer function.  Therefore, some special syntax is required when writing such functions. For grouping, there is the handy `group_by_at()` function, which takes a string as a variable name. Within functions like `ggplot`, we need a special syntax `.data[["variable"]]` to refer to columns.
 
 ```{r}
 mf_plot <- function(df, groups, pos) {
@@ -358,7 +359,7 @@ p3 <- age_sex_dist %>%
 pw <- p1 + p2 + p3
 pw + plot_annotation(
   title = 'Age and Sex Comparison',
-  caption = 'Source: census.gov, acs5, 2023'
+  caption = str_glue("Source: census.gov, acs5, {year}")
 )
 ```
 
@@ -375,7 +376,7 @@ age_sex_dist %>%
   theme(axis.text.y = element_text(size = 6))
 ```
 
-Across the city, on the other hand, there is considerable variability, both in age and sex. It's time to look at the numbers. To do this, I will first combine the data into a single data frame. I need to first assign a `region` to each of the three tibbles. For this I'll use `map2`, which takes an additional vector argument. I'll use `%<-%` to assign the results back to replace the original data frames.
+Across the city, on the other hand, there is considerable variability, both in age and sex. It's time to look at the numbers. To do this, I will first combine the data into a single data frame and assign a `region` to each of the three tibbles. For this I'll use `map2`, which takes two vector arguments. I'll use `%<-%` to assign the results back to the original data frames.
 
 ```{r}
 age_sex_cmp <- age_sex_dist %>% 
@@ -391,9 +392,9 @@ c(age_sex_cmp, age_sex_nm, age_sex_us) %<-%
 age_sex_compare <- rbind(age_sex_cmp, age_sex_nm, age_sex_us)
 ```
 
-I will make the tables with the `gt` package.
+I will make the tables with the `gt` package. I need to pivot the data so I have columns for each region or district. I also want to use percentages instead of raw numbers, so I'll calculate those. Like before, I'll use the special syntax.
 
-First I need to pivot the data so I have columns for each region or district. I also want to use percentages instead of raw numbers, so I'll calculate that. Like before, I'll use the special syntax.
+:::{.callout-tip title="Table functions" collapse="false"}
 
 ```{r}
 prepare_tables <- function(df, group, variable) {
@@ -412,29 +413,27 @@ prepare_tables <- function(df, group, variable) {
 }
 ```
 
-And now, a base `gt` table function.
-
 ```{r}
 print_table <- function(df, group, title) {
   df %>% 
     arrange(.data[[group]]) %>% 
-  gt(rowname_col = group) %>%
-  fmt_percent(columns = everything(), decimals = 1) %>%
-  tab_style(style = cell_text(align = "center"),
-            locations = cells_column_labels(columns = everything())) %>%
-  tab_header(title = md(title)) %>%
-  opt_align_table_header(align = "center") %>% 
-  tab_source_note(source_note = md("*Source: census.gov, acs5, 2023*")) %>%
-  tab_style(style = cell_text(align = "right"),
-            locations = cells_source_notes()) %>% 
-  gt_theme_espn() %>% 
-  opt_align_table_header(align = "center") %>% 
-  cols_align(align = "center", columns = everything()) %>% 
-  data_color(palette = "RColorBrewer::RdBu", direction = "row", 
-             method = "bin")
+    gt(rowname_col = group) %>%
+    fmt_percent(columns = everything(), decimals = 1) %>%
+    tab_style(style = cell_text(align = "center"),
+              locations = cells_column_labels(columns = everything())) %>%
+    tab_header(title = md(title)) %>%
+    tab_source_note(source_note = md("*Source: census.gov, acs5, 2023*")) %>%
+    tab_style(style = cell_text(align = "right"),
+              locations = cells_source_notes()) %>% 
+    gt_theme_espn() %>% 
+    opt_align_table_header(align = "center") %>% 
+    cols_align(align = "center", columns = everything()) %>% 
+    data_color(palette = "RColorBrewer::RdBu", direction = "row", 
+               method = "bin")
 }
 ```
 
+:::
 
 ```{r abq-demo-as-tbl-1}
 age_sex_compare %>% 
@@ -464,7 +463,7 @@ In each row, the darkest red are the lowest values, and the darkest blue are the
 
 # Race
 
-I'll start with a function to clean the race tables. Unlike the former data set, the labels need some extra cleanup for plotting purposes. Note the conditional block where the `.` is required in the `select` statement.
+I'll create the function to clean the race tables. Unlike the former data set, the labels need some extra cleanup for plotting purposes. Note the conditional block where the `.` is required in the `select` statement.
 
 ```{r}
 race_labels <- get_labels("B03002")
@@ -474,8 +473,10 @@ race_clean <- function(df, area) {
     filter(str_detect(label, "_")) %>% 
     separate(label, c("hisp", "race"), sep = "_") %>%
     {
-      if (area) select(., geoid, hisp, race, value = estimate, area)
-      else select(., hisp, race, value = estimate)
+      if (area) 
+        select(., geoid, hisp, race, value = estimate, area)
+      else 
+        select(., hisp, race, value = estimate)
     } %>%
     mutate(
       hisp = if_else(hisp == "Not Hispanic or Latino", 
@@ -568,7 +569,7 @@ race_compare_plt %>%
        fill = "Selected Races")
 ```
 
-New Mexico has few Black and Asian residents, but unsurprisingly a much larger percentage of Native Americans when compared to the country as a whole. These differences are somewhat less in Albuquerque itself. Both have a large percentage of people saying 2 or more races. This is likely due to many people considering "Hispanic" to be a different racial designation than "White".
+New Mexico has few Black and Asian residents, but unsurprisingly a much larger percentage of Native Americans when compared to the country as a whole. These differences are somewhat less in Albuquerque itself. Both have a large percentage of people saying 2 or more races. This is likely due to many people considering "Hispanic" to be a different racial designation than "White", while the census considers the Hispanic identity as distinct from race.
 
 Now let's look at the variability amongst districts.
 
@@ -688,12 +689,13 @@ Now I can get the tables for the other geographies.
 c(edu_us, edu_nm) %<-%
   map2(c("us", "state"),
        c("US", "New Mexico"),
-      \(x, y) get_tables(x, "B15002", edu_labels) %>%
+      \(geography, region) 
+      get_tables(geography, "B15002", edu_labels) %>%
         filter(str_detect(label, "_")) %>% 
         separate(label, c("sex", "education"), sep = "_") %>% 
         select(geoid, sex, education, value = estimate) %>% 
         simplify_education() %>% 
-        mutate(region = y))
+        mutate(region = region))
 
 edu_dist_sf <- edu_bern %>% 
   split_dists() %>% 
@@ -747,7 +749,7 @@ edu_dist %>%
   theme(axis.text.y = element_text(size = 6))
 ```
 
-Again, we see significant variation between districts, District 3 notably devoid of any professional or doctoral degrees.
+Again, we see significant variation between districts, District 3 notably devoid of nealy any professional or doctoral degrees. On the other hand, almost all of District 8 has at least completed high school.
 
 ```{r abq-demo-edu-3}
 #| code-fold: true
@@ -783,15 +785,17 @@ edu_dist_plt <- edu_dist %>%
 p1 <- edu_dist_plt %>% 
   compare_plot("education", "district") +
   scale_y_continuous(labels = scales::percent) +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
-        legend.position = "none") +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    legend.position = "none") +
   labs(title = "Educational Attainment by District",
        subtitle = "Percentage")
   
 p2 <- edu_dist_plt %>% 
   compare_plot("education", "district", position = "stack") +
   scale_y_continuous(labels = scales::comma) +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
   labs(subtitle = "Population",
        fill = "",
        caption = "Source: census.gov, 2023")  
@@ -812,13 +816,13 @@ edu_dist_table %>%
               title = "**Comparison of Educational Attainment**")
 ```
 
-As we've seen before, there is extreme variability here. The differences between District 3 and District 8 are particularly stark.
+As we've seen before, there is extreme variability here. The differences between District 3 and District 8 are particularly stark, and in this case at least, represent the extremes of variability.
 
 # Conclusion
 
 All cities have neighborhoods which are very different from one another demographically and economically. Whether the amount of variability we saw is "normal" is one question. The next step is to look at the economic indicators such as income, property values, rent and inequality. It will be interesting to see the relationship between those indicators and the demographic information gathered here.
 
-Finally, I will save the data. I have 13 data sets that I want to save into four files, one for each geography. For the US and New Mexico data, I can use R's native format, but for the county and district information, which are `sf` objects, I will use multiple layers in a `gpkg` format file. To make this easy, I can use `walk` and `walk2`. These functions work just like the `map` functions, except that they don't return anything useful. They are used only for "side effects" such as reading, writing, or printing.
+I do need save the data for the next stage. I have 13 data sets that I want to save into four files, one for each geography. For the US and New Mexico data, I can use R's native format, but for the county and district information, which are `sf` objects, I will use multiple layers in a `gpkg` format file. To make this easy, I can use `walk` and `walk2`. These functions work just like the `map` functions, except that they don't return anything useful. They are used only for "side effects" such as reading, writing, or printing.
 
 ```{r}
 #| output: false
@@ -828,13 +832,10 @@ walk(list(age_sex_us, edu_us, race_us),
 walk(list(age_sex_nm, edu_nm, race_nm),
      \(df) save(df, file = "data/nm_data.rda"))
 
-walk2(list(age_sex_bern, edu_bern, race_bern),
-      c("age_sex_bern", "edu_bern", "race_bern"),
-      \(df, level) st_write(df, "data/bern_data.gpkg",
-                            layer = level, append = F))
-
-walk2(list(age_sex_dist_sf, edu_dist_sf, race_dist_sf, council_dists),
-      c("age_sex_dist", "edu_dist", "race_dist", "council_dists"),
+walk2(list(age_sex_bern, edu_bern, race_bern, 
+           age_sex_dist_sf, edu_dist_sf, race_dist_sf, council_dists),
+      c("age_sex_bern", "edu_bern", "race_bern", 
+        "age_sex_dist", "edu_dist", "race_dist", "council_dists"),
       \(df, level) st_write(df, "data/abq_data.gpkg",
                         layer = level, append = F))
 ```
