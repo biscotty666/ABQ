@@ -4,12 +4,8 @@ subtitle: "Exploring census data with R"
 format: 
   html:
     code-overflow: wrap
-    code-tools: true
     toc: true
     toc-depth: 2
-    theme: 
-      light: flatly
-      dark: darkly
 execute: 
   freeze: auto
 ---
@@ -38,6 +34,7 @@ library(crsuggest)
 library(gt)
 library(gtExtras)
 library(ggtext)
+library(glue)
 library(patchwork)
 library(janitor)
 library(nngeo)
@@ -118,14 +115,15 @@ I'll plot the district boundaries with `ggplot`, adding a base map with `ggspati
 #| code-summary: "Show the code"
 dist_plot <- function(df) {
   ggplot(df) +
-  annotation_map_tile(type = "osm", alpha = 0.7, 
-    zoomin = -1, cachedir = "~/.cache/maps/") +
-  geom_sf() +
-  geom_sf(aes(color = district), fill = NA, linewidth = 1) +
-  geom_sf_text(aes(label = district), fontface = "bold") +
-  scale_color_viridis_d() +
-  theme_void() +
-  labs(title = "Albuquerque Council Districts")
+    annotation_map_tile(
+      type = "osm", alpha = 0.7, 
+      zoomin = -1, cachedir = "~/.cache/maps/") +
+    geom_sf(aes(color = district), fill = NA, linewidth = 1) +
+    geom_sf_text(aes(label = district), fontface = "bold",
+              nudge_y = 1000, nudge_x = -500) +
+    scale_color_viridis_d() +
+    theme_void() +
+    labs(title = "Albuquerque Council Districts")
 }
 ```
 
@@ -171,6 +169,7 @@ Now I want to look at age, sex, race and education in Albuquerque. I will use `t
 
 ```{r}
 year <- 2023
+source <- str_glue("Source: census.gov, acs5, {year}")
 get_tables <- 
   function(geography, table, labels,
            state = NULL, county = NULL,
@@ -359,7 +358,7 @@ p3 <- age_sex_dist %>%
 pw <- p1 + p2 + p3
 pw + plot_annotation(
   title = 'Age and Sex Comparison',
-  caption = str_glue("Source: census.gov, acs5, {year}")
+  caption = source
 )
 ```
 
@@ -372,8 +371,9 @@ age_sex_dist %>%
   filter(district != "Los Ranchos") %>% 
   mf_plot(c("district", "sex", "agegroup"), pos = 3) +
   facet_wrap(~district) +
-  xlab("population") +
-  theme(axis.text.y = element_text(size = 6))
+  labs(x = "population",
+       caption = source) +
+  theme(axis.text.y = element_text(size = 5))
 ```
 
 Across the city, on the other hand, there is considerable variability, both in age and sex. It's time to look at the numbers. To do this, I will first combine the data into a single data frame and assign a `region` to each of the three tibbles. For this I'll use `map2`, which takes two vector arguments. I'll use `%<-%` to assign the results back to the original data frames.
@@ -461,6 +461,50 @@ age_sex_dist %>%
 
 In each row, the darkest red are the lowest values, and the darkest blue are the highest values. There is, indeed, a lot of variability across districts. For example, only 2.8% of those in District 2 are 5-9 years old, while the number is 8.0% in District 3. On the other hand, a mere 17.8% in District 3 are 55 years or older, while District 8 has 41.9%. In fact, District 3 has the highest percentage in all groups below 20 years of age, while District 6 claims the spot for 18-34 year olds. This high level of variability deserves further study, and could likely prove useful when looking at economic differences between the districts.
 
+Let's take a look at the districts on a map. I'll plot the percentage of the population under 20 years old.
+
+As usual, I'll create a couple of functions, one to calculate the percentages I need, the other to map the results. 
+
+```{r}
+calculate_dist_percents <- function(df1, df2) {
+  totals <- df1 %>% 
+    group_by(district) %>% 
+    summarise(total = sum(value))
+  df2 %>% 
+    group_by(district) %>% 
+    summarise(value = sum(value)) %>%
+    left_join(totals) %>%
+    mutate(percent = value / total,
+         label = glue("{round(percent, 3) * 100}%"))
+}
+
+map_percentage <- function(sf) {
+  dist_plot(council_dists) +
+  geom_sf(data = sf, aes(fill = percent), alpha = 0.35) +
+  scale_fill_viridis_c() +
+  geom_sf_label(data = sf, 
+                aes(label = label),
+                fill = "white", nudge_y = -1000) +
+  guides(color = "none") +
+  labs(title = "Percentage of the population",
+       caption = source)
+}
+```
+
+```{r}
+sf_filtered <- 
+  age_sex_dist_sf %>% 
+  filter(agegroup %in% agegroup[1:5])
+
+dist_lt_20 <- 
+  calculate_dist_percents(age_sex_dist, sf_filtered)
+
+dist_lt_20 %>% 
+  map_percentage() +
+  labs(subtitle = "Under 20 years old")
+```
+
+
 # Race
 
 I'll create the function to clean the race tables. Unlike the former data set, the labels need some extra cleanup for plotting purposes. Note the conditional block where the `.` is required in the `select` statement.
@@ -543,7 +587,8 @@ compare_plot <- function(df, fill, x_var, position = "fill") {
            fill = .data[[fill]])) +
     geom_col(position = position) +
     scale_fill_viridis_d() +
-    theme(axis.title = element_blank())
+    theme(axis.title = element_blank()) +
+    labs(caption = source)
 }
 ```
 
@@ -582,15 +627,15 @@ p1 <- race_dist_plt %>%
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
         legend.position = "none") +
   labs(title = "Racial Comparison by District",
-       subtitle = "Percentage")
+       subtitle = "Percentage", 
+       caption = "")
   
 p2 <- race_dist_plt %>% 
   compare_plot("race", "district", position = "stack") +
   scale_y_continuous(labels = scales::comma) +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
   labs(subtitle = "Population",
-       fill = "Selected Races",
-       caption = "Source: census.gov, 2023")  
+       fill = "Selected Races")  
 
 p1 + p2
 ```
@@ -605,7 +650,6 @@ race_compare_plt %>%
   scale_y_continuous(labels = scales::percent) +
   labs(title = "Hispanic Comparison",
        subtitle = "Albuquerque, State and Country",
-       caption = "Source: census.gov, 2023",
        fill = "")
 ```
 
@@ -620,18 +664,30 @@ p1 <- race_dist_plt %>%
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
         legend.position = "none") +
   labs(title = "Hispanic Comparison by District",
-       subtitle = "Percentage")
+       subtitle = "Percentage", caption = "")
 
 p2 <- race_dist_plt %>% 
   compare_plot("hisp", "district", "stack") +
   scale_y_continuous(labels = scales::comma) +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
         legend.title = element_blank()) +
-  labs(subtitle = "Population",
-       caption = "Source: census.gov, 2023")
+  labs(subtitle = "Population")
 
 p1 + p2
 ```
+
+```{r}
+sf_filtered <- 
+  race_dist_sf %>% 
+  filter(hisp == "Hispanic")
+
+dist_hisp <- calculate_dist_percents(race_dist, sf_filtered)
+
+dist_hisp %>% 
+  map_percentage() +
+  labs(subtitle = "Hispanic")
+```
+
 
 Indeed, there is a high degree of variability across Albuquerque, with some districts very heavily Hispanic, such as the third district, and some not, such as the eighth. The high level of Hispanics in district 3, combined with the fact that this district also has the highest proportion of those who identify as two more more races, lends support to my hypothesis that this group are Hispanic Whites.
 
@@ -798,7 +854,7 @@ p2 <- edu_dist_plt %>%
     axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
   labs(subtitle = "Population",
        fill = "",
-       caption = "Source: census.gov, 2023")  
+       caption = source)
 
 p1 + p2
 ```
@@ -815,6 +871,35 @@ edu_dist_table %>%
   print_table(group = "education", 
               title = "**Comparison of Educational Attainment**")
 ```
+
+```{r}
+sf_filtered <- 
+  edu_dist_sf %>% 
+  filter(education == edu_levels[1])
+
+edu_levels
+
+edu_lt_hs <- 
+  calculate_dist_percents(edu_dist, sf_filtered)
+
+edu_lt_hs %>% 
+  map_percentage() +
+  labs(subtitle = "Less than High School")
+```
+
+```{r}
+sf_filtered <- 
+  edu_dist_sf %>% 
+  filter(education %in% edu_levels[5:7])
+
+edu_adv_deg <- 
+  calculate_dist_percents(edu_dist, sf_filtered)
+
+edu_adv_deg %>% 
+  map_percentage() +
+  labs(subtitle = "Advanced Degrees")
+```
+
 
 As we've seen before, there is extreme variability here. The differences between District 3 and District 8 are particularly stark, and in this case at least, represent the extremes of variability.
 
