@@ -430,15 +430,6 @@ age_sex_dist_sf <- age_sex_bern %>%
   mutate(agegroup = factor(agegroup, unique(agegroup)))
 
 age_sex_dist <- st_drop_geometry(age_sex_dist_sf)
-
-age_sex_dist %>% 
-  group_by(district) %>% 
-  summarise(value = sum(value))
-
-age_sex_dist_sf %>% 
-  group_by(district) %>% 
-  summarise(value = sum(value))
-
 ```
 
 For now I'm keeping some variables I don't really need. This will help me evaluate the results of the splitting operation. I am expecting a certain amount of data loss, since some tracts and parts of tracts lie outside the council districts, even though I filled in interior holes. I would like to do a visual sanity check to verify that the loss makes sense. I'll first look at a small portion to see how much difference there is.
@@ -527,7 +518,7 @@ pw + plot_annotation(
 )
 ```
 
-Overall, these profiles all seem pretty similar, although Albuquerque would seem to have fewer teens and more 30 year olds than the rest of the state or country. Lets compare the districts.
+Overall, these profiles all seem pretty similar, although Albuquerque would seem to have proportionally fewer teens and more 30 year olds than the rest of the state or country. Lets compare the districts.
 
 ```{r abq-demo-as-3}
 #| code-fold: true
@@ -617,20 +608,20 @@ age_sex_dist %>%
   )
 ```
 
-Here we see that, while District 3 has a much higher proportion of people under 20, there are more children in District 5. Also, while District 5 had a higher percentage of 18-35 year olds, more people in this group live in Districts 6 and 7.
+Here we see that, while District 3 has a much higher proportion of people under 20, there are more children in District 5. Also, while District 5 had a higher percentage of 18-35 year olds, more people in this group live in District 7.
 
 This high level of variability deserves further study, and could possibly prove useful when looking at economic differences between the districts later.
 
-Let's take a look at the districts on a map. I'll first plot the percentage of the population under 20 years old, as well as the actual population. 
+Let's take a look at the districts on a map. I'll plot the percentage of the population under 20 years old, as well as the actual population. 
 
 ```{r abq-demo-as-map-1}
 #| code-fold: true
 #| code-summary: "Show the code"
 dist_lt_20 <-
   calculate_dist_percents(
-    age_sex_dist, 
+    age_sex_dist,
     age_sex_dist_sf %>%
-    filter(agegroup %in% agegroup[1:5])
+      filter(agegroup %in% agegroup[1:5])
   )
 
 dist_lt_20 %>%
@@ -638,12 +629,16 @@ dist_lt_20 %>%
   labs(subtitle = "Under 20 years old")
 ```
 
-```{r}
+```{r abq-demo-as-map-2}
+#| code-fold: true
+#| code-summary: "Show the code"
 age_sex_dist_sf %>%
-  filter(district != "Los Ranchos",
-         agegroup %in% agegroup[1:5]) %>%
-  group_by(district) %>% 
-  summarise(value = sum(value)) %>% 
+  filter(
+    district != "Los Ranchos",
+    agegroup %in% agegroup[1:5]
+  ) %>%
+  group_by(district) %>%
+  summarise(value = sum(value)) %>%
   mutate(label = scales::comma(value)) %>%
   map_demo(pct = F) +
   labs(subtitle = "Under 20 years old")
@@ -662,11 +657,9 @@ race_clean <- function(df, area) {
     filter(str_detect(label, "_")) %>%
     separate(label, c("hisp", "race"), sep = "_") %>%
     {
-      if (area) {
-        select(., geoid, hisp, race, value = estimate, area)
-      } else {
-        select(., hisp, race, value = estimate)
-      }
+      if (area) select(., geoid, hisp, race, value = estimate, area)
+      else select(., hisp, race, value = estimate)
+      
     } %>%
     mutate(
       hisp = if_else(hisp == "Not Hispanic or Latino",
@@ -736,7 +729,7 @@ c(race_compare_plt, race_dist_plt) %<-%
 
 :::
 
-And now look at the data.
+Race is a little complicated. The official racial categories include White, Black, Asian American, and Native American. Hispanic vs Non-Hispanic is a separate categorization in the census data. I am interested in both.
 
 ```{r abq-demo-race-1}
 #| code-fold: true
@@ -761,9 +754,22 @@ race_compare_plt %>%
   )
 ```
 
-New Mexico has few Black and Asian residents, but unsurprisingly a much larger percentage of Native Americans when compared to the country as a whole. These differences are somewhat less in Albuquerque itself. Both have a large percentage of people saying 2 or more races. This is likely due to many people considering "Hispanic" to be a different racial designation than "White", while the census considers the Hispanic identity as distinct from race.
+Here we see that New Mexico has few Black and Asian residents, but unsurprisingly a much larger percentage of Native Americans when compared to the country as a whole. These differences are somewhat less in Albuquerque itself. Both have a large percentage of people saying 2 or more races. This could be because, in New Mexico, many Hispanics self-identify as Spanish or Mexican as well as White, therefore selecting 2 or more races. It will be interesting to see if districts with high Hispanic populations also have high "2 or more race" populations. 
 
-Now let's look at the variability amongst districts.
+```{r abq-demo-race-3}
+#| code-fold: true
+#| code-summary: "Show the code"
+race_compare_plt %>%
+  compare_plot("hisp", "region") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "Hispanic Comparison",
+    subtitle = "Albuquerque, State and Country",
+    fill = ""
+  )
+```
+
+New Mexico has the largest Hispanic population by percentage of any state in the country, so these results are hardly surprising. The district breakdown will be more interesting. 
 
 ```{r abq-demo-race-2}
 #| code-fold: true
@@ -795,21 +801,6 @@ p1 + p2
 
 District 4 shows the greatest racial diversity, while district 2 shows the least. District 3 shows the largest percentage of people claiming two or more races. Let's compare Hispanic to non-Hispanic.
 
-```{r abq-demo-race-3}
-#| code-fold: true
-#| code-summary: "Show the code"
-race_compare_plt %>%
-  compare_plot("hisp", "region") +
-  scale_y_continuous(labels = scales::percent) +
-  labs(
-    title = "Hispanic Comparison",
-    subtitle = "Albuquerque, State and Country",
-    fill = ""
-  )
-```
-
-New Mexico has the largest Hispanic population by percentage of any state in the country, so these results are hardly surprising. The district breakdown will be more interesting. 
-
 ```{r abq-demo-race-4}
 #| code-fold: true
 #| code-summary: "Show the code"
@@ -837,14 +828,17 @@ p2 <- race_dist_plt %>%
 p1 + p2
 ```
 
+Indeed, there is a high degree of variability across Albuquerque, with some districts very heavily Hispanic, such as the third district, and some not, such as the eighth. The high level of Hispanics in district 3, combined with the fact that this district also has the highest proportion of those who identify as two more more races, lends support to my hypothesis that this group are Hispanic Whites. Let's view this on a map.
+
 ```{r abq-demo-hisp-map-1}
 #| code-fold: true
 #| code-summary: "Show the code"
-dist_hisp <- 
+dist_hisp <-
   calculate_dist_percents(
-    race_dist, 
+    race_dist,
     race_dist_sf %>%
-  filter(hisp == "Hispanic"))
+      filter(hisp == "Hispanic")
+  )
 
 dist_hisp %>%
   map_demo() +
@@ -852,13 +846,12 @@ dist_hisp %>%
 ```
 
 
-Indeed, there is a high degree of variability across Albuquerque, with some districts very heavily Hispanic, such as the third district, and some not, such as the eighth. The high level of Hispanics in district 3, combined with the fact that this district also has the highest proportion of those who identify as two more more races, lends support to my hypothesis that this group are Hispanic Whites.
 
 ## Education
 
 :::{.callout-note appearance="minimal" title="Data preparation" collapse="true"}
 
-Now we can turn to education. The information provided by `census.gov` contains many groupings, far too many for useful analysis. I will consolidate many of the levels into smaller groupings, using `case_when`.
+The information provided by `census.gov` contains many groupings, far too many for useful analysis. I will consolidate many of the levels into smaller groupings, using `case_when`.
 
 ```{r}
 edu_labels <- get_labels("B15002")
@@ -871,15 +864,15 @@ edu_bern <-
   st_transform(crs) %>%
   mutate(area = st_area(.))
 
-edu_levels <- unique(edu_bern$education)
+edu_levels_all <- unique(edu_bern$education)
 
 simplify_education <- function(df) {
   df %>%
     mutate(
       education = case_when(
-        education %in% edu_levels[1:8]
+        education %in% edu_levels_all[1:8]
         ~ "No HS Diploma",
-        education %in% edu_levels[9:11]
+        education %in% edu_levels_all[9:11]
         ~ "High school graduate",
         TRUE ~ education
       ),
@@ -887,11 +880,11 @@ simplify_education <- function(df) {
     )
 }
 
-edu_levels <- 
-  c("No HS Diploma", "High school graduate", edu_levels[-(1:11)])
-
 edu_bern <- edu_bern %>%
   simplify_education()
+
+edu_levels <- 
+  c("No HS Diploma", "High school graduate", edu_levels_all[-(1:11)])
 
 c(edu_us, edu_nm) %<-%
   map2(
@@ -916,7 +909,7 @@ edu_dist <- st_drop_geometry(edu_dist_sf)
 
 :::
 
-I can use the `mf_plot` function I created earlier, and add the appropriate labels.
+Finally, I can turn to education. This data represents the educational attainment level of people 25 or older. As before, I'll start with a comparison with national and state data.
 
 ```{r abq-demo-edu-1}
 #| code-fold: true
@@ -952,23 +945,6 @@ pw + plot_annotation(
 
 Albuquerque would seem to have proportionally a higher number of people with college degrees compared to New Mexico, and a higher number of advanced degrees than the rest of the country.
 
-```{r abq-demo-edu-2}
-#| code-fold: true
-#| code-summary: "Show the code"
-edu_dist %>%
-  filter(district != "Los Ranchos") %>%
-  mf_plot(c("district", "sex", "education"), 3) +
-  facet_wrap(~district) +
-  labs(
-    x = "Population",
-    title = "Educational attainment in Albuquerque",
-    subtitle = "Age 25 or older"
-  ) +
-  theme(axis.text.y = element_text(size = 6))
-```
-
-Again, we see significant variation between districts, District 3 notably devoid of nealy any professional or doctoral degrees. On the other hand, almost all of District 8 has at least completed high school.
-
 ```{r abq-demo-edu-3}
 #| code-fold: true
 #| code-summary: "Show the code"
@@ -994,7 +970,24 @@ edu_compare_table %>%
   )
 ```
 
-Again, in each row, dark red represents the lowest value and dark blue the highest. Indeed, Albuquerque has proportionally more advanced degrees than the nation as a whole.
+Indeed, Albuquerque does have proportionally more advanced degrees than the nation as a whole.
+
+```{r abq-demo-edu-2}
+#| code-fold: true
+#| code-summary: "Show the code"
+edu_dist %>%
+  filter(district != "Los Ranchos") %>%
+  mf_plot(c("district", "sex", "education"), 3) +
+  facet_wrap(~district) +
+  labs(
+    x = "Population",
+    title = "Educational attainment in Albuquerque",
+    subtitle = "Age 25 or older"
+  ) +
+  theme(axis.text.y = element_text(size = 6))
+```
+
+Again, we see significant variation between districts, District 3 notably devoid of nearly any professional or doctoral degrees. On the other hand, almost all of District 8 has at least completed high school.
 
 ```{r abq-demo-edu-4}
 #| code-fold: true
@@ -1016,7 +1009,8 @@ p1 <- edu_dist_plt %>%
   ) +
   labs(
     title = "Educational Attainment by District (25 or older)",
-    subtitle = "Percentage"
+    subtitle = "Percentage",
+    caption = ""
   )
 
 p2 <- edu_dist_plt %>%
@@ -1034,7 +1028,7 @@ p2 <- edu_dist_plt %>%
 p1 + p2
 ```
 
-```{r}
+```{r abq-demo-edu-10}
 #| code-fold: true
 #| code-summary: "Show the code"
 edu_dist_table <- edu_dist %>%
@@ -1050,22 +1044,26 @@ edu_dist_table %>%
   )
 ```
 
+I would like to see where those without High School Diplomas live.
+
 ```{r abq-demo-nohd-map-1}
 #| code-fold: true
 #| code-summary: "Show the code"
 edu_lt_hs <-
   calculate_dist_percents(
-    edu_dist, 
+    edu_dist,
     edu_dist_sf %>%
-    filter(education == edu_levels[1])
-    )
+      filter(education == edu_levels[1])
+  )
 
 edu_lt_hs %>%
   map_demo() +
-  labs(subtitle = "Less than High School")
+  labs(subtitle = "No High School Diploma")
 ```
 
-```{r}
+```{r abq-demo-edu-11}
+#| code-fold: true
+#| code-summary: "Show the code"
 edu_dist_sf %>%
   filter(district != "Los Ranchos",
          education == edu_levels[1]) %>%
@@ -1076,6 +1074,9 @@ edu_dist_sf %>%
   labs(subtitle = "No High School Diploma")
 ```
 
+Both by percentage and by total, the southern districts of Albuquerque have many more people without diplomas than the rest. It seems that the further north you go, the more people with at least a diploma.
+
+Let's see where the people with advanced degrees live.
 
 ```{r abq-demo-advdeg-map-1}
 #| code-fold: true
@@ -1089,13 +1090,27 @@ edu_adv_deg %>%
   labs(subtitle = "Advanced Degrees")
 ```
 
+```{r abq-demo-advdeg-map-2}
+#| code-fold: true
+#| code-summary: "Show the code"
+edu_dist_sf %>%
+  filter(district != "Los Ranchos",
+         education %in% edu_levels[5:7]) %>%
+  group_by(district) %>% 
+  summarise(value = sum(value)) %>% 
+  mutate(label = scales::comma(value)) %>%
+  map_demo(pct = F) +
+  labs(subtitle = "Advanced Degrees")
+```
+
+
 As we've seen before, there is extreme variability here. The differences between District 3 and District 8 are particularly stark, and in this case at least, represent the extremes of variability.
 
 # Conclusion
 
-All cities have neighborhoods which are very different from one another demographically and economically. Whether the amount of variability we saw is "normal" is one question. The next step is to look at the economic indicators such as income, property values, rent and inequality. It will be interesting to see the relationship between those indicators and the demographic information gathered here.
+All cities have neighborhoods which are very different from one another demographically and economically. Whether the amount of variability we saw is "normal" is one question. The next step for me is to look at the economic indicators such as income, property values, rent and inequality, and see what correlation may exist between these variables and the demographic information gathered here.
 
-I do need save the data for the next stage. I have 13 data sets that I want to save into four files, one for each geography. For the US and New Mexico data, I can use R's native format, but for the county and district information, which are `sf` objects, I will use multiple layers in a `gpkg` format file. To make this easy, I can use `walk` and `walk2`. These functions work just like the `map` functions, except that they don't return anything useful. They are used only for "side effects" such as reading, writing, or printing. Here, I'll use `map` within `walk2`.
+I have many data sets that I want to save into two files for future use. For the US and New Mexico data, I can use R's native format, but for the county and district information, which are `sf` objects, I will use multiple layers in a `gpkg` format file. To make this easy, I can use `walk` and `walk2`. These functions work just like the `map` functions, except that they don't return anything useful. They are used only for "side effects" (a term from functional programming) such as reading, writing, or printing. Here, I'll nest a `map` function within `walk2`.
 
 ```{r}
 #| output: false
