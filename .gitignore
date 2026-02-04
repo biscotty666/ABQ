@@ -17,3 +17,5 @@ devenv.local.yaml
 
 /.quarto/
 **/*.quarto_ipynb
+_extensions
+_freeze
