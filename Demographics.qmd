@@ -6,6 +6,7 @@ format:
     code-overflow: wrap
     toc: true
     toc-depth: 2
+  gfm: default
 execute: 
   freeze: auto
 number-sections: true
@@ -476,11 +477,11 @@ We can see that, in fact, only small portions of the tract are in each of the tw
 ```{r}
 age_sex_dist_sf <- age_sex_bern %>%
   split_dists() %>%
-  select(district, sex, agegroup, value = "new_value") %>%
+  select(geoid, district, sex, agegroup, value = "new_value") %>%
   mutate(agegroup = factor(agegroup, unique(agegroup)))
 
 age_sex_dist <- st_drop_geometry(age_sex_dist_sf) %>%
-  as.tibble()
+  as_tibble()
 ```
 
 :::
@@ -703,7 +704,7 @@ race_bern <-
 race_dist_sf <-
   race_bern %>%
   split_dists() %>%
-  select(district, hisp, race, value = "new_value") %>%
+  select(geoid, district, hisp, race, value = "new_value") %>%
   mutate(region = "Albuquerque")
 
 race_dist <- st_drop_geometry(race_dist_sf)
@@ -901,7 +902,7 @@ c(edu_us, edu_nm) %<-%
 
 edu_dist_sf <- edu_bern %>%
   split_dists() %>%
-  select(district, sex, education, value = "new_value") %>%
+  select(geoid, district, sex, education, value = "new_value") %>%
   mutate(region = "Albuquerque")
 
 edu_dist <- st_drop_geometry(edu_dist_sf)
@@ -1124,7 +1125,7 @@ walk(
 
 data_sets <- c(
   "age_sex_bern", "edu_bern", "race_bern",
-  "age_sex_dist", "edu_dist", "race_dist", "council_dists"
+  "age_sex_dist_sf", "edu_dist_sf", "race_dist_sf", "council_dists"
 )
 
 walk2(
