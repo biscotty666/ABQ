@@ -1,22 +1,13 @@
-#' ---
-#' title: Albuquerque Demographics
-#' ---
-#'
-
 library(tidycensus)
 library(tidyverse)
 library(ggspatial)
 library(sf)
 library(units)
-library(crsuggest)
 library(gt)
 library(gtExtras)
 library(ggtext)
 library(glue)
-library(patchwork)
 library(janitor)
-library(nngeo)
-library(zeallot)
 options(tigris_use_cache = TRUE)
 
 
@@ -59,8 +50,9 @@ get_tables <-
       left_join(labels)
   }
 
+
 get_labels <- function(table) {
-  acs_vars %>%
+  load_variables(year, "acs5") %>%
     filter(str_detect(name, table)) %>%
     select(1:2) %>%
     mutate(
@@ -100,11 +92,17 @@ prepare_tables <- function(df, group, variable) {
     ungroup()
 }
 
-print_table <- function(df, group, title, subtitle = "") {
+print_table <- function(df, group, title, subtitle = "", pct = T) {
   df %>%
     arrange(.data[[group]]) %>%
     gt(rowname_col = group) %>%
-    fmt_percent(columns = everything(), decimals = 1) %>%
+    {
+      if (pct) {
+        fmt_percent(., columns = everything(), decimals = 1)
+      } else {
+        fmt_number(., columns = everything(), decimals = 0)
+      }
+    } %>%
     tab_style(
       style = cell_text(align = "center"),
       locations = cells_column_labels(columns = everything())
@@ -113,7 +111,7 @@ print_table <- function(df, group, title, subtitle = "") {
       title = md(title),
       subtitle = md(subtitle)
     ) %>%
-    tab_source_note(source_note = md("*Source: census.gov, acs5, 2023*")) %>%
+    tab_source_note(source_note = source) %>%
     tab_style(
       style = cell_text(align = "right"),
       locations = cells_source_notes()
@@ -142,12 +140,26 @@ calculate_dist_percents <- function(df1, df2) {
     )
 }
 
-map_percentage <- function(sf) {
+
+map_demo <- function(sf, pct = T) {
   dist_plot(council_dists) +
-    geom_sf(data = sf, aes(fill = percent), alpha = 0.35) +
-    scale_fill_viridis_c() +
+    {
+      if (pct) {
+        geom_sf(data = sf, aes(fill = percent), alpha = 0.35)
+      } else {
+        geom_sf(data = sf, aes(fill = value), alpha = 0.35)
+      }
+    } +
+    {
+      if (pct) {
+        scale_fill_viridis_c(labels = scales::label_percent())
+      } else {
+        scale_fill_viridis_c(labels = scales::label_comma())
+      }
+    } +
     geom_sf_label(
-      data = council_dists, aes(label = district), fontface = "bold",
+      data = council_dists,
+      aes(label = district), fontface = "bold",
       nudge_y = 1000, nudge_x = -500, fill = "gray",
       label.padding = unit(0.1, "lines"), size = 3.5
     ) +
@@ -158,8 +170,9 @@ map_percentage <- function(sf) {
     ) +
     guides(color = "none") +
     labs(
-      title = "Percentage of the population",
-      caption = source
+      title = ifelse(pct, "Percentage of the population", "Population"),
+      caption = source,
+      fill = NULL
     )
 }
 
@@ -177,7 +190,6 @@ compare_plot <- function(df, fill, x_var, position = "fill") {
     labs(caption = source)
 }
 
-
 mf_plot <- function(df, groups, pos) {
   df %>%
     group_by_at(groups) %>%
@@ -189,57 +201,5 @@ mf_plot <- function(df, groups, pos) {
       axis.ticks = element_blank(),
       axis.text.x = element_blank(),
       axis.title.y = element_blank()
-    )
-}
-
-
-race_clean <- function(df, area) {
-  df %>%
-    filter(str_detect(label, "_")) %>%
-    separate(label, c("hisp", "race"), sep = "_") %>%
-    {
-      if (area) {
-        select(., geoid, hisp, race, value = estimate, area)
-      } else {
-        select(., hisp, race, value = estimate)
-      }
-    } %>%
-    mutate(
-      hisp = if_else(hisp == "Not Hispanic or Latino",
-        "Non-Hispanic", "Hispanic"
-      ),
-      race = str_replace(race, " alone$", ""),
-      race = if_else(str_detect(race, "Two"), "Two or more races", race),
-      race = if_else(str_detect(race, "Black"), "Black", race),
-      race = if_else(str_detect(race, "Indian"), "American Indian", race)
-    ) %>%
-    group_by(hisp, race)
-}
-
-
-# edu_levels <- unique(edu_bern$education)
-# edu_levels <-
-#   c("No HS Diploma", "High school graduate", edu_levels[-(1:11)])
-
-simplify_education <- function(df) {
-  df %>%
-    mutate(
-      education = case_when(
-        education == "No schooling completed" |
-          education == "Nursery to 4th grade" |
-          education == "5th and 6th grade" |
-          education == "7th and 8th grade" |
-          education == "9th grade" |
-          education == "10th grade" |
-          education == "11th grade" |
-          education == "12th grade, no diploma"
-        ~ "No HS Diploma",
-        education == "Some college, 1 or more years, no degree" |
-          education == "Some college, less than 1 year" |
-          education == "High school graduate (includes equivalency)"
-        ~ "High school graduate",
-        TRUE ~ education
-      ),
-      education = factor(education, edu_levels)
     )
 }
