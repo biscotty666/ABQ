@@ -14,6 +14,9 @@ exec:
 knitr::opts_chunk$set(echo = TRUE, paged.print = FALSE)
 ```
 
+# Setup
+
+
 ```{r}
 #| message: false
 library(tidycensus)
@@ -25,463 +28,319 @@ library(crsuggest)
 library(gt)
 library(ggtext)
 library(patchwork)
+library(scales)
 ```
 
-In this article, I would like to look at the city of Albuquerque and look at demographic variation among different parts of the city. To this end, I will break down the city by council districts, of which there are nine, and consider economic factors such as income, housing values, poverty levels and income equality. For this exercise, I will obtain the demographic data from `census.gov` using `tidycensus`. I will get the council districts from the county website, and the census data will need to be apportioned to each district. Many census tracts cross district lines, so data must be appropriately assigned. 
-
-# Data Preparation
-
-## City Council Districts
-
-I will start with the easy part, obtaining the boundaries for the city council districts. There are just two twists here: the data from the city website is useless, and; there's a big hole in the middle of Albuquerque, which is the village of Los Ranchos. The Albuquerque website provides a wealth of data, although it is not necessarily well thought-out or well-maintained. In many of the data sets, the relevant data is contained in tables embedded in columns of html tables. In this case, the problem is simpler: the website only provides the councilors' names as a variable, not district numbers, and the names provided are for councilors from several years ago!
-
-Fortunately, the Bernalillo County website provides what's needed, as well as providing the shape for The Village of Los Ranchos de Albuquerque. Los Ranchos is sort of the Beverly Hills of Albuquerque, in the sense that it is a separate municipal enclave (almost) entirely surrounded by Albuquerque, and where many the largest properties and mansions in the area are located.
-
-The data portal for Bernalillo County is not very friendly for programmatic downloading. My first effort to download and unzip the file containing the city council boundaries failed to produce a usable file. Adding the argument `method = "curl"` allowed me to download the files, however.
 
 ```{r}
-#| eval: false
-download.file("https://www.berncoclerk.gov/wp-content/uploads/2025/07/BERNCO_CLERKJuly2025.gdb_.zip", "data/bernalillo.zip", method = "curl")
-unzip("data/bernalillo.zip", overwrite = T)
-```
-
-I will read the file with `sf::st_read`, which will result in an `sf` object. The only variable I'm interested in is the district number, so I'll just grab that, fix the variable name, and make the content more descriptive for easy mapping. The `geometry` is sticky, so I don't need to specify it.
-
-```{r}
-council_dists_bc <- st_read("data/BC_CityCouncil/ABQ_CityCouncils.shp") %>%
-  select(district = DISTRICTNU) %>%
-  mutate(district = paste("District", district))
-council_dists_bc
-```
-
-```{r}
-#| eval: false
-download.file("https://www.berncoclerk.gov/wp-content/uploads/2023/02/LosRanchos.zip", "data/test.zip", method = "curl")
-unzip("data/LosRanchos.zip")
-```
-
-The `crsuggest` package has a useful function to determine an appropriate coordinate reference system. 
-
-```{r}
-suggest_crs(council_dists_bc) %>% head(2)
-```
-
-I prefer working in meters rather than feet, so I'll choose 6528. I will change the variable name in `los_ranchos` to match that in `council_dists`, append it to the other, and transform the CRS.
-
-```{r}
-los_ranchos <- st_read("data/LosRanchos/LosRanchos.shp") %>%
-  select(district = Name)
-
-council_dists <- rbind(council_dists_bc, los_ranchos) %>%
-  st_transform(6528)
-council_dists
-```
-
-I'll plot the district boundaries with `ggplot`, adding a base map with `ggspatial::annotation_map_tile`. I'll be doing variations of this throughout, so I'll make a function.
-
-```{r}
-base_plot <- function(df) {
-  ggplot(df) +
-  annotation_map_tile(
-    type = "osm",
-    cachedir = "~/.cache/maps/",
-    zoomin = -1,
-    alpha = 0.7
-  ) +
-  geom_sf() +
-  theme_void()  
-}
-```
-
-```{r}
-base_plot(council_dists) +
-  geom_sf(aes(color = district), fill = NA, linewidth = 1) +
-  geom_sf_text(aes(label = district)) +
-  scale_color_viridis_d() +
-  theme_void() +
-  labs(title = "Albuquerque Council Districts")
-```
-
-## Census Data
-
-I want to look at some basic demographic and economic information, to see how they compare amongst council districts. I will use `tidycensus` to download data from `census.gov`, using the data from 2023's five-year American Community Survey. I want tract level data for my study area. I also want to compare to state-wide and country-wide data, so I'll grab those at a less detailed level.
-
-Variables are easily discoverable with the useful function `tidycensus::load_variables`, which takes a year and a dataset. Once downloaded, you can use `View` to search for those of interest.
-
-```{r}
-#| eval: false
-v23 <- load_variables(2023, "acs5")
-View(v23)
+source("demographic-functions.R")
 ```
 
 The function to download the data is `get_acs()`, which takes a series of pretty self-explanatory arguments. `tidycensus` allows you to supply a named vector for variables, so that the returned data will already have useful variable names. By specifying `geometry = TRUE` I will get an `sf` object back, and specifying `output=wide` gives me a table with a separate column for each variable.
 
+
+```{r}
+year <- 2023
+crs <- 6528
+caption <- str_glue("Source: census.gov, acs5, {year}")
+```
+
+I can use `get_acs` for variables, not just tables, as I did last time. The only difference is the `variables` argument in place of the `tables` argument. I will write this function a little differently than the `get_tables` function used before. Instead of building conditional logic into the function, I will write a simplified function.
+
+
+```{r}
+get_vars <-
+  function(geography, vars, geometry,
+           state = NULL, county = NULL) {
+    get_acs(
+      geography = geography,
+      state = state,
+      county = county,
+      variables = vars,
+      output = "wide",
+      year = year,
+      geometry = geometry,
+      cache_table = T
+    ) %>%
+      select(-2) %>%
+      fix_names()
+  }
+```
+
+Now I will use `purrr::partial()` to create separate functions for each geography. I'll also write a function to fix the names.
+
+```{r}
+get_bern_tracts <- partial(get_vars,
+  geography = "tract",
+  state = "NM",
+  county = "Bernalillo",
+  geometry = T
+)
+
+get_nm <- partial(get_vars,
+  geography = "state",
+  state = "NM",
+  geometry = F
+)
+
+get_us <- partial(get_vars,
+  geography = "us",
+  geometry = F
+)
+
+fix_names <- function(df) {
+  df %>%
+    rename_with(~ sub("E$", "", .)) %>%
+    rename_with(~ sub("M$", "_moe", .)) %>%
+    rename_with(~ sub("GEOID", "geoid", .))
+}
+```
+
+
+
 ```{r}
 vars <- c(
-  med_house_value = "B25077_001",
-  income_hh = "B19001_001",
-  population = "B01003_001",
-  gini = "B19083_001",
-  med_age = "B01002_001",
-  in_poverty = "B17001A_002"
+  `Med House Value` = "B25077_001",
+  `Owner Occupied` = "B25003_002",
+  `Renter Occupied` = "B25003_003",
+  Vacant = "B25002_003",
+  Occupied = "B25002_002",
+  `Med HH Income` = "B19013_001",
+  `Med HH Income Hisp` = "B19013I_001",
+  Gini = "B19083_001",
+  `Med Rent` = "B25031_001"
 )
 ```
 
 ```{r}
-#| eval: false
-bern_data <- get_acs(
-  geography = "tract",
-  state = "NM",
-  county = "Bernalillo",
-  variables = vars,
-  output = "wide",
-  year = 2023,
-  geometry = T,
-  cache_table = T
-)
-
-st_write(bern_data, "data/demographics.gpkg", layer = "county", append = F)
-
-nm_data <- get_acs(
-  geography = "county",
-  state = "NM",
-  variables = vars,
-  output = "wide",
-  year = 2023,
-  geometry = T,
-  cache_table = T
-)
-
-st_write(nm_data, "data/demographics.gpkg", layer = "state", append = F)
-
-us_data <- get_acs(
-  geography = "state",
-  variables = vars,
-  output = "wide",
-  year = 2023,
-  geometry = T,
-  cache_table = T
-)
-
-st_write(us_data, "data/demographics.gpkg", layer = "country", append = F)
-```
-
-I would like to compare education levels as well. The data for this is broken down into 25 variables, far more than I need, so I will group them into four. I'm also going to drop the margin of error information. Notice that, in this case, I am requesting an entire table rather than specific variables, by using the `table` argument rather than the `variable` argument.
-
-```{r}
-#| eval: false
-bern_edu <- get_acs(
-  geography = "tract",
-  state = "NM",
-  county = "Bernalillo",
-  table = "B15003",
-  output = "wide",
-  year = 2023,
-  geometry = T,
-  cache_table = T
-) %>%
-  select(-2) %>%
-  select(!ends_with("M")) %>%
-  mutate(
-    no_hs_deg = rowSums(across("B15003_002E":"B15003_016E")),
-    hs_some_college = rowSums(across("B15003_017E":"B15003_020E")),
-    bach_assoc_deg = rowSums(across("B15003_021E":"B15003_022E")),
-    grad_deg = rowSums(across("B15003_023E":"B15003_025E"))
-  ) %>%
-  select(-c("B15003_001E":"B15003_025E"))
-
-st_write(bern_edu, "data/demographics.gpkg", layer = "education", append = F)
-```
-
-```{r}
-bernalillo_edu <-
-  st_read("data/demographics.gpkg", layer = "education")
-bernalillo_demographics <-
-  st_read("data/demographics.gpkg", layer = "county")
+bern_data <- get_bern_tracts(vars) %>% 
+  st_transform(crs)
 ```
 
 Now let's look at the data.
 
 ```{r}
-summary(bernalillo_demographics)
+summary(bern_data)
 ```
 
-There is clean-up work to do here. There are some `NA`s, some areas with 0 population, an unneeded NAME column, and the ugly variable names to deal with. I also need to make sure it is in the correct CRS. First I'll fix the names, using a small function to make the code cleaner, drop the uninteresting columns and transform the coordinates. Then I do a simple join with the educational table based on the GEOID, dropping the geometry from one, and then dropping the error values.
+There is clean-up work to do here. There are some `NA`s, some areas with minimums of 0.
 
 ```{r}
-fix_names <- function(df) {
-  df %>%
-    rename_with(~ sub("E$", "", .)) %>%
-    rename_with(~ sub("M$", "_moe", .))
+bern_data %>% 
+  filter(if_any(everything(), is.na)) %>% 
+  print(n = 14)
+```
+
+Four of these rows clearly have bad data
+
+The `NA`s have to do with housing. I will replace them with average values, but I will wait until I divide the data by district and use district averages instead of city-wide ones.
+
+I'm curious about the very low minimums for some variables.
+
+```{r}
+bern_data %>% 
+  filter(is.na(`Med HH Income`))
+```
+
+These records seem responsible for a lot of the confusion. I'd like to replace these with `NA`, but I don't want to do it now, since the records would be filled with average values later. For now, I'll mark them with a dummy value.
+
+```{r}
+bern_data <- bern_data %>% 
+  mutate(across(where(is.numeric), 
+                \(x) if_else(is.na(`Med HH Income`), -999, x)))
+```
+
+I'll split the data between districts. Unlike in the last article, these values are all averages (intensive). After dividing the data between districts, these values will not need to be apportioned among the sub-sections. 
+
+```{r}
+council_dists <- st_read("data/abq_demographics.gpkg", layer = "council_dists") %>% 
+  st_transform(crs)
+dist_data <- st_intersection(bern_data, council_dists)
+summary(dist_data)
+```
+
+I will fill in the missing data with averages, then turn the dummy -999 value to `NA`.
+
+```{r}
+vars_fin <- c("Med.House.Value", "Med.HH.Income", "Med.HH.Income.Hisp", "Med.Rent", "Gini")
+vars_fin_all <- c(vars_fin, str_replace(vars_fin, "$", "_moe"))
+
+var_avgs <- dist_data %>% 
+  st_drop_geometry() %>% 
+  group_by(district) %>% 
+  summarise(across(all_of(vars_fin_all), list(dist = \(x) mean(x, na.rm = T)))) %>% 
+  ungroup()
+
+fill_avgs <- function(var, replace) {
+  if_else(is.na(var), replace, var)
 }
 
-bernalillo_demographics <-
-  bernalillo_demographics %>%
-  select(-2) %>% 
-  fix_names() %>%
-  st_transform(6528)
-
-
-bernalillo_demographics <- bernalillo_demographics %>%
-  left_join(st_drop_geometry(bernalillo_edu), by = "GEOID") %>%
-  select(!ends_with("moe"))
-
-summary(bernalillo_demographics)
-```
-
-That looks better. Now let's look at the 0 population areas.
-
-```{r}
-bernalillo_demographics %>% filter(population == 0)
-```
-
-```{r}
-base_plot(bernalillo_demographics %>% filter(population == 0)) +
-  geom_sf_text(aes(label = GEOID))
-```
-
-
-One of these is way out of town. the other is the state fairgrounds. I will go ahead and drop them. For the few other `NA`s, I'll replace them with averages.
-
-```{r}
-bernalillo_demographics <- bernalillo_demographics %>%
-  filter(population != 0) %>% 
+dist_data <- dist_data %>%
+  left_join(var_avgs) %>% 
   mutate(
-    med_house_value = ifelse(is.na(med_house_value),
-      median(med_house_value, na.rm = T),
-      med_house_value
-    ),
-    gini = ifelse(is.na(gini),
-      mean(gini, na.rm = T),
-      gini
-    )
-  )
-
-summary(bernalillo_demographics)
-```
-
-Most of the data seems normal, now. I am curious about the tract(s) with no household income and very small populations. Are they the same?
-
-```{r}
-bernalillo_demographics %>% 
-  filter(income_hh < 100 | population < 150)
-```
-
-```{r}
-base_plot(bernalillo_demographics %>% filter(income_hh < 100 | population < 150)) +
-  geom_sf_text(aes(label = GEOID))
-```
-
-One is again far out of town, and the other is the Petroglyph National Monument. I'll drop these as well.
-
-```{r}
-bernalillo_demographics <- 
-  bernalillo_demographics %>% 
-  filter(income_hh > 100 & population > 150)
-
-summary(bernalillo_demographics)
-```
-
-Before combining this data with the council district shapes, I want to calculate the area for each tract, which I'll need later. I'll then calculate a population density for each area.
-
-```{r}
-bernalillo_demographics <- bernalillo_demographics %>% 
-  mutate(
-    area = st_area(.),
-    pop_dens = population / area
-  )
-```
-
-I would like to to calculate percentage values for the extensive variables. I'll use `purrr`'s `modify` with a lambda function to perform the calculations across all the relevant columns, then bind the new values back to the original data.
-
-```{r}
-demo_pcts <- 
-  modify(bernalillo_demographics[7:11], 
-       \(x) x / bernalillo_demographics$population) %>% 
-  rename_with(~ sub("$", "_pct", .), .cols = everything()) %>% 
-  st_drop_geometry()
-
-bernalillo_demographics <- 
-  bernalillo_demographics %>% 
-  cbind(demo_pcts)
-
-summary(bernalillo_demographics)
-```
-
-## Combining the data
-
-Now I want to divide the census data by council districts. Since many census tracts are split between multiple districts, areal interpolation will be necessary to assign appropriate values to each district. A number of options exist, such as `sf`'s own `st_interpolate_aw` and `aw_interpolate` from the `areal` package. Neither of these are what I really want, however, because I would like to keep the tract level data. I will instead intersect the datasets and do a manual areal interpolation.
-
-First I'll use `st_intersection()` to split the tracts by council district. Since I'm not interested in areas outside the districts, I'll then crop the data.
-
-```{r}
-cd_demographics <- 
-  st_intersection(bernalillo_demographics, council_dists) %>% 
-  st_crop(st_bbox(council_dists))
-cd_demographics %>% 
-  arrange(GEOID) %>% 
-  select(GEOID, population, no_hs_deg)
-```
-
-As you can see, we now have separate slices for tracts which span more than one district, but the data has been copied into each new row. For intensive variables like percentages or averages, this is okay, but for extensive variables like population, they must be spread across the new areas. I'll do this based on areal proportioning. First I'll calculate the areas of each new subdivision, and the percentage they represent of the former regions. This allows me to re-calculate the extensive variables, assigning the proper proportion to each.
-
-```{r}
-cd_demographics$area_split <- 
-  st_area(cd_demographics) %>% 
-  set_units(km^2)
-
-cd_demographics <- cd_demographics %>% 
-  group_by(GEOID) %>% 
-  mutate(
-    area_pct = area_split / area,
-    population = round(population * area_pct, 0),
-    in_poverty = round(in_poverty * area_pct, 0),
-    no_hs_deg = round(no_hs_deg * area_pct, 0),
-    hs_some_college = round(hs_some_college * area_pct, 0),
-    bach_assoc_deg = round(bach_assoc_deg * area_pct, 0),
-    grad_deg = round(grad_deg * area_pct, 0)
+    Med.House.Value = fill_avgs(Med.House.Value, Med.House.Value_dist),
+    Med.House.Value_moe = 
+      fill_avgs(Med.House.Value_moe,Med.House.Value_moe_dist),
+    Med.Rent = fill_avgs(Med.Rent, Med.Rent_dist),
+    Med.Rent_moe = fill_avgs(Med.Rent_moe, Med.Rent_moe_dist),
+    Med.HH.Income = fill_avgs(Med.HH.Income, Med.HH.Income_dist),
+    Med.HH.Income_moe = fill_avgs(Med.HH.Income_moe, Med.HH.Income_moe_dist),
+    Med.HH.Income.Hisp = fill_avgs(Med.HH.Income.Hisp, Med.HH.Income.Hisp_dist),
+    Med.HH.Income.Hisp_moe = fill_avgs(Med.HH.Income.Hisp_moe, Med.HH.Income.Hisp_moe_dist),
+    Gini = fill_avgs(Gini, Gini_dist),
+    Gini_moe = fill_avgs(Gini_moe, Gini_moe_dist)
   ) %>% 
-  arrange(GEOID)
+  mutate(across(where(is.numeric), 
+                \(x) if_else(Med.HH.Income == -999, NA_real_, x)))
 
-st_write(cd_demographics, "data/cd-demographics.gpkg", append = F)
-
-options(scipen = 100)
-
-cd_demographics %>% 
-  arrange(GEOID) %>% 
-  select(GEOID, population, no_hs_deg)
+summary(dist_data)
 ```
+
 
 ## Visualization
 
-Let's take a look, finally, at what we have. First, a few maps. I'll create a function to generate maps for each variable.
+Let's take a look, finally, at what we have. First, a few maps. I'll create a function to generate maps for each variable. This function will build on the `map_demo` function from last time.
 
 ```{r}
-base_plot_2 <- function(df, var) {
-  var = df[[var]]
-  ggplot(df) +
-  annotation_map_tile(
-    type = "osm",
-    cachedir = "~/.cache/maps/",
-    zoomin = -1,
-    alpha = 0.6
-  ) +
-  geom_sf(aes(fill = as.numeric(var)), alpha = 0.4) +
-  geom_sf(data = council_dists, aes(color = district), 
-          fill = NA, linewidth = 0.5) +
-  scale_fill_viridis_c() +
-  scale_color_viridis_d() +
-  guides(color = "none") +
-  theme_void()
+map_demo_value <- partial(map_demo, pct = F)
+
+map_var <- function(df, var, label) {
+  df %>%
+    mutate(value = .data[[var]],
+           label = scales::label_comma()(value)) %>% 
+    map_demo_value() +
+    labs(title = label)
 }
+
+dist_sum <- dist_data %>% 
+  group_by(district) %>% 
+  summarise(
+    Med.House.Value = round(mean(Med.House.Value, na.rm = T)),
+    Med.HH.Income = round(mean(Med.HH.Income, na.rm = T)),
+    Med.HH.Income.Hisp = round(mean(Med.HH.Income.Hisp, na.rm = T)),
+    Med.Rent = round(mean(Med.Rent, na.rm = T)),
+    Gini = mean(Gini, na.rm = T)
+  )
+
+labels <- c("Median House Value", "Median Household Income", "Median Household Income Hispanic", "Median gross rent",
+            "Gini index")
+
+map2(vars_fin, labels,
+      \(var, label) dist_sum %>%
+        map_var(var, label))
 ```
 
 ```{r}
-poverty <- base_plot_2(cd_demographics, "in_poverty") +
-  labs(
-  title = "Poverty",
-  subtitle = "By census tract",
-  caption = "Source: census.gov ACS 2023",
-  fill = "People\n in Poverty"
-  )
-
-population_density <- base_plot_2(cd_demographics, "pop_dens") +
-  labs(
-    title = "Population Density",
-    subtitle = "By census tract",
-    caption = "Source: census.gov ACS 2023",
-    fill = "Population\n Density"
-  )
-
-gini <- base_plot_2(cd_demographics, "gini") +
-  labs(
-    title = "GINI",
-    subtitle = "By census tract",
-    caption = "Source: census.gov ACS 2023",
-    fill = "GINI"
-  )
-
-income <- base_plot_2(cd_demographics, "income_hh") +
-  labs(
-    title = "Household Income",
-    subtitle = "By census tract",
-    caption = "Source: census.gov ACS 2023",
-    fill = "Household Income"
-  )
-
-```
-
-```{r}
-(population_density + poverty) /
-  (gini + income)
-  
+ggplot(dist_data, aes(x = log(Med.House.Value))) +
+  geom_histogram(alpha = 0.5, fill = "navy", color = "navy",
+                 bins = 40) +
+  facet_wrap(~ district) +
+  theme_minimal() +
+  scale_x_continuous(labels = scales::label_number(accuracy = 0.1)) +
+  labs(x = "Median home value")
 ```
 
 
+
 ```{r}
+abq_data <- dist_data %>% 
+  filter(district != "Los Ranchos")
 library(classInt)
 options(scipen = 999)
-br <- classInt::classIntervals(cd_demographics$income_hh,
-                               n = 7, style = "fisher")$brks %>% 
-  as.integer()
-br_sd <- classIntervals(
-  cd_demographics$income_hh, 5,
-  style = "sd", sd_m = c(-Inf, -1, 0, 1, +Inf))
 br_quantile <- classIntervals(
-  cd_demographics$income_hh, 5,
+  abq_data$med_hh_income, 5,
   style = "quantile")
 br_pretty <- classIntervals(
-  cd_demographics$income_hh, 5,
+  abq_data$med_hh_income, 5,
   style = "pretty")
 br_fisher <- classIntervals(
-  cd_demographics$income_hh, 5,
+  abq_data$med_hh_income, 5,
   style = "fisher")
-br_ht <- classIntervals(
-  cd_demographics$income_hh,
-  style = "headtails", thr = 1)
 br_km <- classIntervals(
-  cd_demographics$income_hh, 5,
+  abq_data$med_hh_income, 5,
   style = "kmeans")
-br_hc_single <- classIntervals(
-  cd_demographics$income_hh, 5,
-  style = "hclust", method = "single"
-)
-br_hc_complete <- classIntervals(
-  cd_demographics$income_hh, 5,
-  style = "hclust", method = "complete"
-)
-br_bc <- classIntervals(
-  cd_demographics$income_hh, 5,
-  style = "bclust", verbose = F
-)
-br_sd$brks; br_quantile$brks; br_pretty$brks; br_fisher$brks; br_ht$brks; br_km$brks
-br_hc_single$brks; br_hc_complete$brks; br_bc$brks
 ```
 
 ```{r}
-pal <- findColours(br_sd, c("blue", "grey", "red"))
-length(br_hc_complete$brks)
-br_hc_complete$brks
-class(br_hc_complete)
-```
-
-
-```{r}
-cd_demographics$income_hh_q <- cut(cd_demographics$income_hh, br_km$brks,
+abq_data$med_hh_income_q <- cut(abq_data$med_hh_income, br_quantile$brks,
                         include.lowest = TRUE, dig.lab = 10)
-pal <- colorRampPalette(c("yellow", "darkgreen", "purple"))(length(br_km$brks))
-pal
+pal <- colorRampPalette(c("darkred", "darkgreen", "navy"))(length(br_quantile$brks))
 ```
 
 ```{r}
-ggplot(cd_demographics) +
+map_tracts <- function(sf, sf_sum, pct = F, desc = T,
+                       title = "Population", subtitle = "") {
+  dist_plot(council_dists) +
+    {
+      if (pct) {
+        geom_sf(data = sf, aes(fill = percent), alpha = 0.35)
+      } else {
+        geom_sf(data = sf, aes(fill = value), alpha = 0.35)
+      }
+    } +
+    {
+      if (pct) {
+        scale_fill_viridis_c(labels = label_percent())
+      } else if (desc) {
+        scale_fill_viridis_d()
+      } else {
+        scale_fill_viridis_c(labels = label_comma())
+      }
+    } +
+    geom_sf_label(
+      data = council_dists,
+      aes(label = district), fontface = "bold",
+      nudge_y = 1000, nudge_x = -500, fill = "gray",
+      label.padding = unit(0.1, "lines"), size = 3.5
+    ) +
+    geom_sf_label(
+      data = sf_sum,
+      aes(label = label),
+      fill = "grey", nudge_y = -1000
+    ) + guides(color = "none") +
+    labs(
+      title = title,
+      subtitle = subtitle,
+      caption = source,
+      fill = NULL
+    )
+}
+
+make_plot_data <- function(df, vars) {
+  plot_data <- df %>% 
+  select(district, value = .data[[vars[1]]], .data[[vars[2]]])
+  plot_data_sum <- df %>% 
+  group_by(district) %>% 
+  summarise(avg = mean(.data[[vars[2]]], na.rm = T)) %>% 
+      mutate(label = label_comma()(avg))
+  list("plot_data" = plot_data, 
+       "plot_data_sum" = plot_data_sum)
+}
+
+plot_data <- abq_data %>% 
+    make_plot_data(c("med_hh_income_q", "med_hh_income"))
+plot_data_sum <- plot_data$plot_data_sum
+plot_data <- plot_data$plot_data
+
+plot_data %>%
+  map_tracts(plot_data_sum,
+    title = "Median Household Income",
+    subtitle = "Albuquerque Districts"
+  )
+
+
+```
+
+
+```{r}
+ggplot(abq_data) +
   annotation_map_tile(
     type = "osm",
     cachedir = "~/.cache/maps/",
     zoomin = -1,
     alpha = 0.5
   ) +
-  geom_sf(aes(fill = income_hh_q), alpha = 0.4) +
+  geom_sf(aes(fill = med_hh_income_q), alpha = 0.4) +
   geom_sf(data = council_dists, aes(color = district), fill = NA, linewidth = 1) +
   geom_sf_text(data = council_dists, aes(label = district)) +
   scale_fill_manual(values = pal) +
@@ -501,85 +360,41 @@ ggplot(cd_demographics) +
 ## Initial Visualization and Summary Data
 
 ```{r}
-ggplot(cd_demographics, aes(x = income_hh, y = district)) +
-  geom_boxplot() +
-  geom_jitter(height = 0.1, color = "blue", size = 1, alpha = 0.6) + 
-  coord_flip() +
-  labs(
-    title = "2023 Household Income in Albuquerque, NM",
-    subtitle = "By district",
-    caption = "Source: census.gov ACS"
-  )
-```
+us_data <- get_us(vars) %>% 
+  mutate(district = "US")
+nm_data <- get_nm(vars) %>% 
+  mutate(district = "New Mexico")
 
-```{r}
-names(cd_demographics)
-cd_demographics_df <- cd_demographics %>% st_drop_geometry()
+dist_data_simple <- dist_data %>% 
+  st_drop_geometry() %>% 
+  select(!ends_with("dist"))
+nm_data$income_hh
+
+all_data <- rbind(dist_data_simple, us_data, nm_data)
 ```
 
 
 ```{r}
-ggplot(cd_demographics) +
-  annotation_map_tile(
-    type = "osm",
-    cachedir = "~/.cache/maps/",
-    zoomin = -1,
-    alpha = 0.5
-  ) +
-  geom_sf(aes(fill = income_hh), alpha = 0.4) +
-  geom_sf(data = council_dists, aes(color = district), fill = NA, linewidth = 1) +
-  geom_sf_text(data = council_dists, aes(label = district)) +
-  scale_fill_viridis_c() +
-  scale_color_viridis_d(guide = "none") +
-  theme_void() +
-  labs(
-    title = "2023 Household Income in Albuquerque, NM",
-    subtitle = "By census tract",
-    caption = "Source: census.gov ACS",
-    fill = "Median\nHousehold\nIncome"
-  )
-```
-
-
-```{r}
-ggplot() +
-  annotation_map_tile(
-    type = "osm",
-    cachedir = "~/.cache/maps/",
-    zoomin = -1,
-    alpha = 0.5
-  ) +
-  geom_sf(data = cd_demographics, aes(fill = pop_dens), alpha = 0.4) +
-  geom_sf(data = council_dists, aes(color = district), fill = NA, linewidth = 1) +
-  geom_sf_text(data = council_dists, aes(label = district)) +
-  scale_fill_viridis_c() +
-  scale_color_viridis_d(guide = "none") +
-  theme_void()
-```
-
-```{r}
-cd_demographics %>% 
+all_data %>% 
   st_drop_geometry() %>%
   group_by(district) %>% 
   summarise(
-    population = sum(population), 
-    med_house_value = median(med_house_value),
-    income_hh = median(income_hh),
-    med_age = median(med_age),
-    in_poverty = sum(in_poverty),
+    med_house_value = mean(med_house_value),
+    income_hh = mean(income_hh),
+    med_gross_rent = mean(med_gross_rent),
     gini = mean(gini)
   ) %>% 
-  select(district, population, med_house_value, income_hh, med_age, in_poverty, gini) %>%
+  select(district, med_house_value, med_gross_rent, income_hh, gini) %>%
   gt(rowname_col = "district") %>%
   cols_label(
-    population = "Population",
     med_house_value = "Med House Value",
+    med_gross_rent = "Med Gross Rent",
     income_hh = "HH Income",
-    med_age = "Age",
     gini = "GINI"
   ) %>%
   tab_header(
-    title = md("**Basic Demographics for Albuquerque**")
+    title = md("**Basic Financial Indicators**"),
+    subtitle = "Albuquerque by District"
   ) %>%
   tab_source_note(
     source_note = md("*Source: census.gov, acs5, 2023*")
@@ -589,17 +404,17 @@ cd_demographics %>%
     columns = c(med_house_value, income_hh),
     decimals = 0
   ) %>%
-  fmt_number(columns = "med_age", decimals = 1) %>%
-  fmt_number(columns = "gini", decimals = 3) %>%
-  fmt_number(columns = "population", decimals = 0)
+  fmt_number(columns = vars_fin, decimals = 0) %>%
+  fmt_number(columns = "gini", decimals = 3)
 ```
 
 ## Compare to State and Country
 
 
 ```{r}
-ggplot(cd_demographics, aes(x = district, y = income_hh)) +
-  geom_boxplot(aes(fill = district)) +
+ggplot(abq_data, aes(x = district, y = income_hh)) +
+  geom_boxplot(fill = "lightgrey") +
+  geom_jitter(width = .2) +
   theme_bw() +
   labs(
     y = "Household Income",
@@ -608,11 +423,41 @@ ggplot(cd_demographics, aes(x = district, y = income_hh)) +
     caption = "Source: census.gov ACS"
   ) +
   theme(
-    legend.position = "bottom",
-    axis.text.x = element_blank(),
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
     axis.ticks.x = element_blank(),
     axis.title.x = element_blank(),
     legend.title = element_blank()
   )
 ```
 
+
+## Adding demographics
+
+```{r}
+process <- function(df, var) {
+  df %>%
+    st_drop_geometry() %>%
+    group_by_at(c("geoid", "district", var)) %>%
+    summarise(value = sum(value)) %>%
+    pivot_wider(names_from = var, values_from = value) %>% 
+    ungroup()
+}
+
+variables <- c("agegroup", "education", "hisp")
+layers <- c("age_sex_dist_sf", "edu_dist_sf", "race_dist_sf")
+
+abq_demos <-
+  map2(
+    layers,
+    variables,
+    \(layer, variable) st_read("data/abq_demographics.gpkg", layer = layer) %>%
+      process(variable)
+  ) %>%
+  reduce(full_join, by = c("geoid", "district")) %>% 
+  ungroup()
+
+dist_data <- left_join(dist_data, abq_demos,
+  by = c("geoid", "district")
+)
+```
