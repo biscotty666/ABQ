@@ -96,19 +96,25 @@ fix_names <- function(df) {
 }
 ```
 
+```{r}
+v23_subject <- load_variables(2023, "acs5/subject", cache = T)
+View(v23_subject)
+```
 
 
 ```{r}
 vars <- c(
-  `Med House Value` = "B25077_001",
-  `Owner Occupied` = "B25003_002",
-  `Renter Occupied` = "B25003_003",
+  Med.House.Value = "B25077_001",
+  Owner.Occupied = "B25003_002",
+  Renter.Occupied = "B25003_003",
   Vacant = "B25002_003",
   Occupied = "B25002_002",
-  `Med HH Income` = "B19013_001",
-  `Med HH Income Hisp` = "B19013I_001",
+  Med.HH.Income = "B19013_001",
   Gini = "B19083_001",
-  `Med Rent` = "B25031_001"
+  Med.Rent = "B25031_001",
+  Foreign.Born.Pct = "DP02_0094P",
+  Hisp.Pct = "DP05_0076P",
+  In.Poverty = "B17001A_001"
 )
 ```
 
@@ -127,8 +133,7 @@ There is clean-up work to do here. There are some `NA`s, some areas with minimum
 
 ```{r}
 bern_data %>% 
-  filter(if_any(everything(), is.na)) %>% 
-  print(n = 14)
+  filter(if_any(everything(), is.na))
 ```
 
 Four of these rows clearly have bad data
@@ -139,7 +144,7 @@ I'm curious about the very low minimums for some variables.
 
 ```{r}
 bern_data %>% 
-  filter(is.na(`Med HH Income`))
+  filter(is.na(Med.HH.Income))
 ```
 
 These records seem responsible for a lot of the confusion. I'd like to replace these with `NA`, but I don't want to do it now, since the records would be filled with average values later. For now, I'll mark them with a dummy value.
@@ -147,7 +152,7 @@ These records seem responsible for a lot of the confusion. I'd like to replace t
 ```{r}
 bern_data <- bern_data %>% 
   mutate(across(where(is.numeric), 
-                \(x) if_else(is.na(`Med HH Income`), -999, x)))
+                \(x) if_else(is.na(Med.HH.Income), -999, x)))
 ```
 
 I'll split the data between districts. Unlike in the last article, these values are all averages (intensive). After dividing the data between districts, these values will not need to be apportioned among the sub-sections. 
@@ -162,13 +167,13 @@ summary(dist_data)
 I will fill in the missing data with averages, then turn the dummy -999 value to `NA`.
 
 ```{r}
-vars_fin <- c("Med.House.Value", "Med.HH.Income", "Med.HH.Income.Hisp", "Med.Rent", "Gini")
-vars_fin_all <- c(vars_fin, str_replace(vars_fin, "$", "_moe"))
+vars_na <- c("Med.House.Value", "Med.HH.Income", "Med.Rent")
+vars_na_all <- c(vars_na, str_replace(vars_na, "$", "_moe"))
 
 var_avgs <- dist_data %>% 
   st_drop_geometry() %>% 
   group_by(district) %>% 
-  summarise(across(all_of(vars_fin_all), list(dist = \(x) mean(x, na.rm = T)))) %>% 
+  summarise(across(all_of(vars_na_all), list(dist = \(x) mean(x, na.rm = T)))) %>% 
   ungroup()
 
 fill_avgs <- function(var, replace) {
@@ -184,11 +189,7 @@ dist_data <- dist_data %>%
     Med.Rent = fill_avgs(Med.Rent, Med.Rent_dist),
     Med.Rent_moe = fill_avgs(Med.Rent_moe, Med.Rent_moe_dist),
     Med.HH.Income = fill_avgs(Med.HH.Income, Med.HH.Income_dist),
-    Med.HH.Income_moe = fill_avgs(Med.HH.Income_moe, Med.HH.Income_moe_dist),
-    Med.HH.Income.Hisp = fill_avgs(Med.HH.Income.Hisp, Med.HH.Income.Hisp_dist),
-    Med.HH.Income.Hisp_moe = fill_avgs(Med.HH.Income.Hisp_moe, Med.HH.Income.Hisp_moe_dist),
-    Gini = fill_avgs(Gini, Gini_dist),
-    Gini_moe = fill_avgs(Gini_moe, Gini_moe_dist)
+    Med.HH.Income_moe = fill_avgs(Med.HH.Income_moe, Med.HH.Income_moe_dist)
   ) %>% 
   mutate(across(where(is.numeric), 
                 \(x) if_else(Med.HH.Income == -999, NA_real_, x)))
@@ -212,62 +213,6 @@ map_var <- function(df, var, label) {
     labs(title = label)
 }
 
-dist_sum <- dist_data %>% 
-  group_by(district) %>% 
-  summarise(
-    Med.House.Value = round(mean(Med.House.Value, na.rm = T)),
-    Med.HH.Income = round(mean(Med.HH.Income, na.rm = T)),
-    Med.HH.Income.Hisp = round(mean(Med.HH.Income.Hisp, na.rm = T)),
-    Med.Rent = round(mean(Med.Rent, na.rm = T)),
-    Gini = mean(Gini, na.rm = T)
-  )
-
-labels <- c("Median House Value", "Median Household Income", "Median Household Income Hispanic", "Median gross rent",
-            "Gini index")
-
-map2(vars_fin, labels,
-      \(var, label) dist_sum %>%
-        map_var(var, label))
-```
-
-```{r}
-ggplot(dist_data, aes(x = log(Med.House.Value))) +
-  geom_histogram(alpha = 0.5, fill = "navy", color = "navy",
-                 bins = 40) +
-  facet_wrap(~ district) +
-  theme_minimal() +
-  scale_x_continuous(labels = scales::label_number(accuracy = 0.1)) +
-  labs(x = "Median home value")
-```
-
-
-
-```{r}
-abq_data <- dist_data %>% 
-  filter(district != "Los Ranchos")
-library(classInt)
-options(scipen = 999)
-br_quantile <- classIntervals(
-  abq_data$med_hh_income, 5,
-  style = "quantile")
-br_pretty <- classIntervals(
-  abq_data$med_hh_income, 5,
-  style = "pretty")
-br_fisher <- classIntervals(
-  abq_data$med_hh_income, 5,
-  style = "fisher")
-br_km <- classIntervals(
-  abq_data$med_hh_income, 5,
-  style = "kmeans")
-```
-
-```{r}
-abq_data$med_hh_income_q <- cut(abq_data$med_hh_income, br_quantile$brks,
-                        include.lowest = TRUE, dig.lab = 10)
-pal <- colorRampPalette(c("darkred", "darkgreen", "navy"))(length(br_quantile$brks))
-```
-
-```{r}
 map_tracts <- function(sf, sf_sum, pct = F, desc = T,
                        title = "Population", subtitle = "") {
   dist_plot(council_dists) +
@@ -317,6 +262,15 @@ make_plot_data <- function(df, vars) {
        "plot_data_sum" = plot_data_sum)
 }
 
+dist_sum <- dist_data %>% 
+  group_by(district) %>% 
+  summarise(
+    Med.House.Value = round(mean(Med.House.Value, na.rm = T)),
+    Med.HH.Income = round(mean(Med.HH.Income, na.rm = T)),
+    Med.Rent = round(mean(Med.Rent, na.rm = T)),
+    Gini = mean(Gini, na.rm = T)
+  )
+
 plot_data <- abq_data %>% 
     make_plot_data(c("med_hh_income_q", "med_hh_income"))
 plot_data_sum <- plot_data$plot_data_sum
@@ -327,6 +281,97 @@ plot_data %>%
     title = "Median Household Income",
     subtitle = "Albuquerque Districts"
   )
+
+
+labels <- c("Median House Value", "Median Household Income", "Median gross rent",
+            "Gini index")
+vars_fin <- c(vars_na, "Gini")
+source <- caption
+map2(vars_fin, labels,
+      \(var, label) dist_sum %>%
+        map_var(var, label))
+```
+
+```{r}
+dist_data %>%
+  filter(district != "Los Ranchos") %>%
+  ggplot(aes(x = log(Med.House.Value))) +
+  geom_histogram(
+    alpha = 0.5, fill = "navy", color = "navy",
+    bins = 40
+  ) +
+  facet_wrap(~district) +
+  theme_minimal() +
+  scale_x_continuous(labels = scales::label_number(accuracy = 0.1)) +
+  labs(x = "Median home value")
+```
+
+
+```{r}
+dist_data %>%
+  filter(district != "Los Ranchos") %>%
+  ggplot(aes(x = Med.House.Value)) +
+  geom_histogram(
+    alpha = 0.5, fill = "navy", color = "navy",
+    bins = 40
+  ) +
+  facet_wrap(~district) +
+  theme_minimal() +
+  scale_x_continuous(labels = scales::label_number(accuracy = 0.1)) +
+  labs(x = "Median home value")
+```
+
+```{r}
+formula <- "log(Med.House.Value) ~ district + Med.HH.Income + Foreign.Born.Pct + Hisp.Pct"
+
+dist_data_abq <- dist_data %>% 
+  filter(district != "Los Ranchos")
+
+model1 <- lm(formula = formula, data = dist_data_abq)
+summary(model1)
+```
+
+
+```
+  Owner.Occupied = "B25003_002",
+  Renter.Occupied = "B25003_003",
+  Vacant = "B25002_003",
+  Occupied = "B25002_002",
+  Med.HH.Income = "B19013_001",
+  Gini = "B19083_001",
+  Med.Rent = "B25031_001",
+  Foreign.Born.Pct = "DP02_0094P",
+  Hisp.Pct = "DP05_0076P",
+  In.Poverty = "B17001A_001"
+```
+
+
+```{r}
+abq_data <- dist_data %>% 
+  filter(district != "Los Ranchos")
+library(classInt)
+options(scipen = 999)
+br_quantile <- classIntervals(
+  abq_data$med_hh_income, 5,
+  style = "quantile")
+br_pretty <- classIntervals(
+  abq_data$med_hh_income, 5,
+  style = "pretty")
+br_fisher <- classIntervals(
+  abq_data$med_hh_income, 5,
+  style = "fisher")
+br_km <- classIntervals(
+  abq_data$med_hh_income, 5,
+  style = "kmeans")
+```
+
+```{r}
+abq_data$med_hh_income_q <- cut(abq_data$med_hh_income, br_quantile$brks,
+                        include.lowest = TRUE, dig.lab = 10)
+pal <- colorRampPalette(c("darkred", "darkgreen", "navy"))(length(br_quantile$brks))
+```
+
+```{r}
 
 
 ```
