@@ -8,7 +8,9 @@
   packages = with pkgs;
     [ git rstudio pandoc quarto texliveMedium ] ++ (with rPackages; [
       styler
+      car
       classInt
+      corrr
       crsuggest
       devtools
       geofacet
