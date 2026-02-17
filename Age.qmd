@@ -1,0 +1,182 @@
+---
+title: "AgeSex"
+format: html
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, paged.print = FALSE)
+```
+
+# Setup
+
+
+```{r}
+#| message: false
+library(tidyverse)
+library(sf)
+library(corrr)
+library(car)
+library(spdep)
+library(zeallot)
+library(rstatix)
+library(GGally)
+source("demographic-functions.R")
+```
+
+```{r}
+process <- function(df, var) {
+  df %>%
+    st_drop_geometry() %>%
+    group_by_at(c("geoid", "district", var)) %>%
+    summarise(value = sum(value)) %>%
+    pivot_wider(names_from = all_of(var), values_from = value) %>% 
+    ungroup()
+}
+variables <- c("agegroup", "education", "hisp")
+layers <- c("age_sex_dist_sf", "edu_dist_sf", "race_dist_sf")
+
+c(abq_age, abq_edu, abq_race) %<-%
+  map2(
+    layers,
+    variables,
+    \(layer, variable) st_read("data/abq_demographics.gpkg", layer = layer) %>%
+      process(variable) %>% 
+      filter(district != "Los Ranchos")
+  )
+```
+
+```{r}
+under_20_cols <- names(abq_age)[c(3:5, 11, 16)]
+dist_levels <- unique(abq_age$district) %>% 
+  sort()
+abq_age <- abq_age %>% 
+  mutate(district = factor(district, levels = dist_levels),
+         Total = rowSums(across(where(is.numeric)), na.rm = T),
+         Under.20 = rowSums(across(all_of(under_20_cols)), na.rm = T),
+         Under.20.pct = Under.20 / Total)
+
+abq_age %>% 
+  mutate(district = factor(district, levels = dist_levels),
+         Total = rowSums(across(where(is.numeric)), na.rm = T)) %>% 
+  select(Total)
+
+summary(abq_age)
+         
+# abq_age[5,]     
+#          Under.20 = rowSums(across(all_of(under_20_cols)), na.rm = T),
+         # Under.20.pct = Under.20 / Total)
+```
+
+```{r}
+
+```
+
+
+
+```{r}
+tmp_age_4 <- tmp_age %>% 
+  mutate()
+result <- aov(Under.20.pct ~ district, data = abq_age)
+summary(result)
+```
+
+```{r}
+abq_age %>% 
+  ggpubr::ggboxplot("district", "Under.20.pct", fill = "district")
+```
+
+
+```{r}
+(result_tk <- TukeyHSD(result))
+```
+
+District 3-District 2, District 4-District 3, District 6-District 3, District 7-District 3,
+District 8-District 3, District 8-District 3
+
+```{r}
+c(district = , Under.20.pct = ) %<-%
+  abq_age
+
+bartlett.test(Under.20.pct, district)
+```
+
+```{r}
+glm(formula = Under.20.pct ~ district, family = "quasibinomial",
+    data = abq_age) %>% summary()
+```
+
+```{r}
+abq_age %>% 
+  shapiro_test(Under.20.pct)
+```
+
+```{r}
+abq_age %>%
+  shapiro_test(Total)
+```
+
+```{r}
+ks.test(abq_age$Under.20.pct, "pnorm")
+```
+
+```{r}
+abq_age$Under.20.pct
+abq_age %>% 
+  mutate(log_20 = log(Under.20.pct)) %>% 
+  shapiro_test(log_20)
+```
+
+
+```{r}
+ggdensity(log(abq_age$Under.20.pct),
+  add = "mean",
+  fill = "navy"
+)
+```
+
+```{r}
+ggqqplot(abq_age$Under.20.pct)
+```
+
+
+```{r}
+abq_age %>% abq_age %>% select(-1)
+```
+
+```{r}
+admisc::listRDA("data/us_nm_demographics.rda")
+load("data/us_nm_demographics.rda")
+str(tmp)
+```
+
+```{r}
+age_sex_labels <- get_labels("B01001A")
+
+age_sex_bern <-
+  get_tables("tract", "B01001A", age_sex_labels, geometry = T) %>%
+  st_transform(crs) %>%
+  mutate(area = st_area(.)) %>%
+  filter(str_detect(label, "years")) %>%
+  separate(label, c("sex", "agegroup"), sep = "_") %>%
+  select(geoid, sex, agegroup, value = estimate, area)
+```
+
+```{r}
+  # df %>%
+  #   st_drop_geometry() %>%
+  #   group_by_at(c("geoid", "district", var)) %>%
+  #   summarise(value = sum(value)) %>%
+  #   pivot_wider(names_from = all_of(var), values_from = value) %>% 
+  #   ungroup()
+age_sex_bern %>% 
+  st_drop_geometry() %>% 
+  group_by_at(c("geoid", "agegroup")) %>%
+    summarise(value = sum(value)) %>%
+    pivot_wider(names_from = agegroup, values_from = value) %>%
+    ungroup() %>% 
+  filter(if_all(where(is.numeric), \(x) x == 0))
+
+
+```
+
