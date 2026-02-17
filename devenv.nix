@@ -8,6 +8,7 @@
   packages = with pkgs;
     [ git rstudio pandoc quarto texliveMedium ] ++ (with rPackages; [
       styler
+      admisc
       car
       classInt
       corrr
@@ -16,6 +17,8 @@
       geofacet
       geojsonsf
       # ggsci
+      GGally
+      ggpubr
       ggspatial
       ggtext
       # ggthemes
@@ -23,6 +26,7 @@
       gtExtras
       janitor
       nngeo
+      nortest
       pagedown
       paletteer
       patchwork
@@ -30,10 +34,14 @@
       rnaturalearth
       rnaturalearthdata
       roxygen2
+      rstatix
       rvest
       sf
+      spData
+      spdep
       tidycensus
       tidyverse
+      tmap
       units
       zeallot
     ]);
