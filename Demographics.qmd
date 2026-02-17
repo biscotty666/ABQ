@@ -1115,13 +1115,9 @@ I have many data sets that I want to save into two files for future use. For the
 
 ```{r}
 #| output: false
-walk(
-  list(
-    age_sex_us, edu_us, race_us,
-    age_sex_nm, edu_nm, race_nm
-  ),
-  \(df) save(df, file = "data/us_nm_demographics.rda")
-)
+save(age_sex_us, edu_us, race_us,
+    age_sex_nm, edu_nm, race_nm,
+    file = "data/us_nm_demographics.rda")
 
 data_sets <- c(
   "age_sex_bern", "edu_bern", "race_bern",
