@@ -29,12 +29,23 @@ library(gt)
 library(ggtext)
 library(patchwork)
 library(scales)
+library(corrr)
+library(car)
+library(spdep)
 ```
 
 
 ```{r}
 source("demographic-functions.R")
+
+detach("package:janitor", unload = T)
 ```
+
+```{r}
+strings <- c("this Is a Strange_string", "AND THIS ANOTHER_One")
+make_clean_names(strings, case = "big_camel", sep_out = ".")
+```
+
 
 The function to download the data is `get_acs()`, which takes a series of pretty self-explanatory arguments. `tidycensus` allows you to supply a named vector for variables, so that the returned data will already have useful variable names. By specifying `geometry = TRUE` I will get an `sf` object back, and specifying `output=wide` gives me a table with a separate column for each variable.
 
@@ -104,17 +115,19 @@ View(v23_subject)
 
 ```{r}
 vars <- c(
-  Med.House.Value = "B25077_001",
+  House.Value.Med = "B25077_001",
   Owner.Occupied = "B25003_002",
   Renter.Occupied = "B25003_003",
   Vacant = "B25002_003",
   Occupied = "B25002_002",
-  Med.HH.Income = "B19013_001",
+  Income.HH.Med = "B19013_001",
   Gini = "B19083_001",
-  Med.Rent = "B25031_001",
+  Rent.Med = "B25031_001",
   Foreign.Born.Pct = "DP02_0094P",
   Hisp.Pct = "DP05_0076P",
-  In.Poverty = "B17001A_001"
+  In.Poverty = "B17001A_001",
+  Age.Med = "B01002_001",
+  College.Pct = "DP02_0068P"
 )
 ```
 
@@ -144,7 +157,7 @@ I'm curious about the very low minimums for some variables.
 
 ```{r}
 bern_data %>% 
-  filter(is.na(Med.HH.Income))
+  filter(is.na(Income.HH.Med))
 ```
 
 These records seem responsible for a lot of the confusion. I'd like to replace these with `NA`, but I don't want to do it now, since the records would be filled with average values later. For now, I'll mark them with a dummy value.
@@ -152,7 +165,7 @@ These records seem responsible for a lot of the confusion. I'd like to replace t
 ```{r}
 bern_data <- bern_data %>% 
   mutate(across(where(is.numeric), 
-                \(x) if_else(is.na(Med.HH.Income), -999, x)))
+                \(x) if_else(is.na(Income.HH.Med), -999, x)))
 ```
 
 I'll split the data between districts. Unlike in the last article, these values are all averages (intensive). After dividing the data between districts, these values will not need to be apportioned among the sub-sections. 
@@ -167,7 +180,7 @@ summary(dist_data)
 I will fill in the missing data with averages, then turn the dummy -999 value to `NA`.
 
 ```{r}
-vars_na <- c("Med.House.Value", "Med.HH.Income", "Med.Rent")
+vars_na <- c("House.Value.Med", "Income.HH.Med", "Rent.Med")
 vars_na_all <- c(vars_na, str_replace(vars_na, "$", "_moe"))
 
 var_avgs <- dist_data %>% 
@@ -183,18 +196,20 @@ fill_avgs <- function(var, replace) {
 dist_data <- dist_data %>%
   left_join(var_avgs) %>% 
   mutate(
-    Med.House.Value = fill_avgs(Med.House.Value, Med.House.Value_dist),
-    Med.House.Value_moe = 
-      fill_avgs(Med.House.Value_moe,Med.House.Value_moe_dist),
-    Med.Rent = fill_avgs(Med.Rent, Med.Rent_dist),
-    Med.Rent_moe = fill_avgs(Med.Rent_moe, Med.Rent_moe_dist),
-    Med.HH.Income = fill_avgs(Med.HH.Income, Med.HH.Income_dist),
-    Med.HH.Income_moe = fill_avgs(Med.HH.Income_moe, Med.HH.Income_moe_dist)
+    House.Value.Med = fill_avgs(House.Value.Med, House.Value.Med_dist),
+    House.Value.Med_moe = 
+      fill_avgs(House.Value.Med_moe, House.Value.Med_moe_dist),
+    Rent.Med = fill_avgs(Rent.Med, Rent.Med_dist),
+    Rent.Med_moe = fill_avgs(Rent.Med_moe, Rent.Med_moe_dist),
+    Income.HH.Med = fill_avgs(Income.HH.Med, Income.HH.Med_dist),
+    Income.HH.Med_moe = fill_avgs(Income.HH.Med_moe, Income.HH.Med_moe_dist)
   ) %>% 
   mutate(across(where(is.numeric), 
-                \(x) if_else(Med.HH.Income == -999, NA_real_, x)))
+                \(x) if_else(Income.HH.Med == -999, NA_real_, x)))
 
-summary(dist_data)
+abq_data <- dist_data %>% 
+  filter(district != "Los Ranchos")
+summary(abq_data)
 ```
 
 
@@ -271,6 +286,8 @@ dist_sum <- dist_data %>%
     Gini = mean(Gini, na.rm = T)
   )
 
+
+
 plot_data <- abq_data %>% 
     make_plot_data(c("med_hh_income_q", "med_hh_income"))
 plot_data_sum <- plot_data$plot_data_sum
@@ -293,9 +310,8 @@ map2(vars_fin, labels,
 ```
 
 ```{r}
-dist_data %>%
-  filter(district != "Los Ranchos") %>%
-  ggplot(aes(x = log(Med.House.Value))) +
+abq_data %>%
+  ggplot(aes(x = Income.HH.Med)) +
   geom_histogram(
     alpha = 0.5, fill = "navy", color = "navy",
     bins = 40
@@ -303,14 +319,12 @@ dist_data %>%
   facet_wrap(~district) +
   theme_minimal() +
   scale_x_continuous(labels = scales::label_number(accuracy = 0.1)) +
-  labs(x = "Median home value")
+  labs(x = "Median Household Income")
 ```
 
-
 ```{r}
-dist_data %>%
-  filter(district != "Los Ranchos") %>%
-  ggplot(aes(x = Med.House.Value)) +
+abq_data %>%
+  ggplot(aes(x = log(Income.HH.Med))) +
   geom_histogram(
     alpha = 0.5, fill = "navy", color = "navy",
     bins = 40
@@ -318,17 +332,214 @@ dist_data %>%
   facet_wrap(~district) +
   theme_minimal() +
   scale_x_continuous(labels = scales::label_number(accuracy = 0.1)) +
-  labs(x = "Median home value")
+  labs(x = "Median Household Income (log)")
 ```
 
+
+
+
 ```{r}
-formula <- "log(Med.House.Value) ~ district + Med.HH.Income + Foreign.Born.Pct + Hisp.Pct"
+abq_data_fm <- abq_data %>%
+  st_drop_geometry() %>% 
+  select(-geoid) %>% 
+  select(!(ends_with("moe") | ends_with("dist")))
+  
+formula <- "log(Income.HH.Med) ~ ."
 
-dist_data_abq <- dist_data %>% 
-  filter(district != "Los Ranchos")
-
-model1 <- lm(formula = formula, data = dist_data_abq)
+model1 <- lm(formula = formula, data = abq_data_fm)
 summary(model1)
+```
+
+```{r}
+formula <- "Income.HH.Med ~ ."
+abq_data_fm <- abq_data_fm %>% select(-c(district, Occupied))
+model2 <- lm(formula = formula, data = abq_data_fm)
+summary(model2)
+```
+
+```{r}
+cor(abq_data_fm, use = "complete.obs")
+```
+
+```{r}
+vif(model2)
+```
+
+Remove those with values above 5.
+
+```{r}
+abq_data_fm <- abq_data_fm %>% select(-c(Owner.Occupied, In.Poverty))
+model3 <- lm(formula = formula, data = abq_data_fm)
+summary(model3)
+```
+
+
+## Adding demographics
+
+```{r}
+#| eval: false
+process <- function(df, var) {
+  df %>%
+    st_drop_geometry() %>%
+    group_by_at(c("geoid", "district", var)) %>%
+    summarise(value = sum(value)) %>%
+    pivot_wider(names_from = var, values_from = value) %>% 
+    ungroup()
+}
+
+variables <- c("agegroup", "education", "hisp")
+layers <- c("age_sex_dist_sf", "edu_dist_sf", "race_dist_sf")
+
+abq_demos <-
+library(zeallot)
+c(abq_age, abq_edu, abq_race) %<-%
+  map2(
+    layers,
+    variables,
+    \(layer, variable) st_read("data/abq_demographics.gpkg", layer = layer) %>%
+      process(variable) %>% 
+      filter(district != "Los Ranchos")
+  )
+
+c(abq_edu, abq_race) %<-%
+  map(list(abq_edu, abq_race),
+      \(x) x %>% clean_names("big_camel", sep_out = "."))
+
+abq_age <- abq_age %>% 
+  rename(Geoid = geoid, District = district)
+c(abq_age, abq_edu, abq_race) %>% 
+  reduce(full_join, by = c("Geoid", "District"))
+
+abq_age %>% 
+  left_join(abq_edu, by = c("Geoid", "District")) %>% 
+  left_join(abq_race, by = c("Geoid", "District"))
+
+abq_data_demos <- left_join(abq_data, abq_demos,
+  by = c("geoid", "district")
+) %>% 
+  st_drop_geometry() %>% 
+  select(-geoid) %>% 
+  select(!(ends_with("moe") | ends_with("dist")))
+
+formula <- "Income.HH.Med ~ ."
+model3 <- lm(formula = formula, data = abq_data_demos)
+summary(model3)
+```
+
+# Spatial Autocorrelation
+
+## Global Moran's $I$
+
+```{r}
+abq_data_nona <- abq_data %>% 
+  mutate(vbl = Income.HH.Med) %>% 
+  filter(!is.na(vbl))
+nb <- poly2nb(abq_data_nona, queen = T)
+nbw <- nb2listw(nb, style = "W", zero.policy = T)
+
+gmoran <- moran.test(abq_data_nona$vbl, nbw, alternative = "two.sided")
+gmoran
+```
+
+
+```{r}
+moran.plot(abq_data_nona$vbl, nbw)
+```
+
+```{r}
+gmoranMC <- moran.mc(abq_data_nona$vbl, nbw, nsim = 999)
+gmoranMC
+```
+
+```{r}
+hist(gmoranMC$res)
+```
+
+## Local Moran's $I$
+
+```{r}
+lmoran <- localmoran(abq_data_nona$vbl, nbw, alternative = "greater")
+head(lmoran)
+```
+
+```{r}
+abq_data_nona$lmI <- lmoran[, "Ii"] # local Moran's I
+abq_data_nona$lmZ <- lmoran[, "Z.Ii"] # z-scores
+abq_data_nona$lmp <- lmoran[, "Pr(z > E(Ii))"]
+```
+
+```{r}
+library(tmap)
+
+p1 <- tm_shape(abq_data_nona) +
+  tm_polygons(col = "vbl", title = "vbl", style = "quantile") +
+  tm_layout(legend.outside = TRUE)
+
+p2 <- tm_shape(abq_data_nona) +
+  tm_polygons(col = "lmI", title = "Local Moran's I",
+              style = "quantile") +
+  tm_layout(legend.outside = TRUE)
+
+p3 <- tm_shape(abq_data_nona) +
+  tm_polygons(col = "lmZ", title = "Z-score",
+              breaks = c(-Inf, 1.65, Inf)) +
+  tm_layout(legend.outside = TRUE)
+
+p4 <- tm_shape(abq_data_nona) +
+  tm_polygons(col = "lmp", title = "p-value",
+              breaks = c(-Inf, 0.05, Inf)) +
+  tm_layout(legend.outside = TRUE)
+
+tmap_arrange(p1, p2, p3, p4)
+```
+
+```{r}
+tmap5 <- tm_shape(abq_data_nona) + 
+  tm_polygons(col = "lmZ",
+              title = "Local Moran's I", 
+              style = "fixed",
+              breaks = c(-Inf, -1.96, 1.96, Inf),
+              labels = c("Negative SAC", "No SAC", "Positive SAC"),
+              palette =  c("blue", "white", "red")) +
+  tm_layout(legend.outside = TRUE)
+tmap5
+```
+
+## Clusters
+
+```{r}
+lmoran <- localmoran(abq_data_nona$vbl, nbw, alternative = "two.sided")
+head(lmoran)
+```
+
+```{r}
+abq_data_nona$lmp <- lmoran[, 5]
+mp <- moran.plot(as.vector(scale(abq_data_nona$vbl)), nbw)
+```
+
+```{r}
+abq_data_nona$quadrant <- NA
+abq_data_nona[(mp$x >= 0 & mp$wx >= 0) & (abq_data_nona$lmp <= 0.05), "quadrant"] <- 1
+abq_data_nona[(mp$x <= 0 & mp$wx <= 0) & (abq_data_nona$lmp <= 0.05), "quadrant"] <- 2
+abq_data_nona[(mp$x >= 0 & mp$wx <= 0) & (abq_data_nona$lmp <= 0.05), "quadrant"] <- 3
+abq_data_nona[(mp$x <= 0 & mp$wx >= 0) & (abq_data_nona$lmp <= 0.05), "quadrant"] <- 4
+abq_data_nona[(abq_data_nona$lmp > 0.05), "quadrant"] <- 5
+```
+
+```{r}
+tm_shape(abq_data_nona) +
+  tm_fill(
+    col = "quadrant", title = "",
+    breaks = c(1, 2, 3, 4, 5, 6),
+    palette = c("red", "blue", "lightpink", "skyblue2", "white"),
+    labels = c(
+      "High-High", "Low-Low", "High-Low",
+      "Low-High", "Non-significant"
+    )
+  ) +
+  tm_legend(text.size = 1) + tm_borders(alpha = 0.5) +
+  tm_layout(frame = FALSE, title = "Clusters") +
+  tm_layout(legend.outside = TRUE)
 ```
 
 
@@ -477,32 +688,3 @@ ggplot(abq_data, aes(x = district, y = income_hh)) +
 ```
 
 
-## Adding demographics
-
-```{r}
-process <- function(df, var) {
-  df %>%
-    st_drop_geometry() %>%
-    group_by_at(c("geoid", "district", var)) %>%
-    summarise(value = sum(value)) %>%
-    pivot_wider(names_from = var, values_from = value) %>% 
-    ungroup()
-}
-
-variables <- c("agegroup", "education", "hisp")
-layers <- c("age_sex_dist_sf", "edu_dist_sf", "race_dist_sf")
-
-abq_demos <-
-  map2(
-    layers,
-    variables,
-    \(layer, variable) st_read("data/abq_demographics.gpkg", layer = layer) %>%
-      process(variable)
-  ) %>%
-  reduce(full_join, by = c("geoid", "district")) %>% 
-  ungroup()
-
-dist_data <- left_join(dist_data, abq_demos,
-  by = c("geoid", "district")
-)
-```
