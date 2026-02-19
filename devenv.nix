@@ -31,6 +31,7 @@
       paletteer
       patchwork
       prettymapr
+      rcompanion
       rnaturalearth
       rnaturalearthdata
       roxygen2
