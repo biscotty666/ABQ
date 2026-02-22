@@ -8,8 +8,13 @@ format: html
 knitr::opts_chunk$set(echo = TRUE, paged.print = FALSE)
 ```
 
+# Introduction
+
+In the [last article](https://biscotty.net/posts/data-science/r-census/abq-demographics) I looked at age, race, and educational attainment in Albuquerque, with a particular focus on differences between council districts. In some cases, the variation was striking. In particular, the third district seemed quite different from the others in a number of ways. Now I would like to apply some statistical testing to see if this impression is valid.
+
 # Setup
 
+I will begin by loading the required libraries, as well as the datasets created from the last session. I'll 
 
 ```{r}
 #| message: false
@@ -27,26 +32,76 @@ source("demographic-functions.R")
 ```
 
 ```{r}
+#| warning: false
 process <- function(df, var) {
   df %>%
-    st_drop_geometry() %>%
     group_by_at(c("geoid", "district", var)) %>%
     summarise(value = sum(value)) %>%
     pivot_wider(names_from = all_of(var), values_from = value) %>% 
     ungroup()
 }
-variables <- c("agegroup", "education", "hisp")
-layers <- c("age_sex_dist_sf", "edu_dist_sf", "race_dist_sf")
 
-c(abq_age, abq_edu, abq_race) %<-%
+tmp <- st_read("data/abq_demographics.gpkg",
+               layer = "age_sex_dist")
+
+c(abq_age, abq_sex, abq_edu) %<-%
   map2(
-    layers,
-    variables,
+    c("age_sex_dist", "age_sex_dist", "edu_dist"),
+    c("agegroup", "sex", "education"),
     \(layer, variable) st_read("data/abq_demographics.gpkg", layer = layer) %>%
       process(variable) %>% 
       filter(district != "Los Ranchos")
   )
 ```
+
+```{r}
+dist_levels <- unique(abq_sex$district) %>% 
+  sort()
+abq_sex <- abq_sex %>% 
+  mutate(Total = Female + Male,
+         Female.pct = Female / Total,
+         district = factor(district, levels = dist_levels))
+
+```
+
+```{r}
+abq_sex %>% 
+  ggboxplot("district", "Female.pct", fill = "district")
+```
+
+```{r}
+shapiro_test(abq_sex$Female.pct)
+plotNormalHistogram(abq_sex$Female.pct)
+```
+
+```{r}
+abq_sex$Female.pct.NST <- blom(abq_sex$Female.pct)
+plotNormalHistogram(abq_sex$Female.pct.NST)
+```
+
+```{r}
+shapiro_test(abq_sex$Female.pct.NST)
+```
+
+
+```{r}
+result <- aov(Female.pct.NST ~ district, data = abq_sex)
+summary(result)
+```
+
+```{r}
+tmp <- abq_age %>% 
+  left_join(abq_sex, by = c("geoid", "district"))
+```
+
+```{r}
+cols_gt_55 <- names(abq_age)[12:15]
+tmp <- tmp %>% 
+  mutate(Over.54 = rowSums(across(all_of(cols_gt_55)), na.rm = T),
+         Over.54.pct = Over.54 / Total)
+```
+
+
 
 # Age Levels
 
@@ -65,7 +120,7 @@ summary(abq_age)
 
 ```{r}
 abq_age %>% 
-  ggpubr::ggboxplot("district", "Under.20.pct", fill = "district")
+  ggboxplot("district", "Under.20.pct", fill = "district")
 ```
 
 ```{r}
@@ -74,7 +129,8 @@ summary(result)
 ```
 
 ```{r}
-(result_tk <- TukeyHSD(result))
+result_tk <- TukeyHSD(result)
+subset(result_tk[[1]], result_tk[[1]][, 4] < .05)
 ```
 
 District 3-District 2, District 4-District 3, District 6-District 3, District 7-District 3,
@@ -275,7 +331,8 @@ summary(result)
 
 
 ```{r}
-(result_tk <- TukeyHSD(result))
+result_tk <- TukeyHSD(result)
+subset(result_tk[[1]], result_tk[[1]][, 4] < .05)
 ```
 
 ```{r}
@@ -284,8 +341,15 @@ summary(result)
 ```
 
 ```{r}
-(result_tk <- TukeyHSD(result))
+result_tk <- TukeyHSD(result)[[1]] %>% 
+  data.frame()
+result_tk %>% 
+  filter(p.adj <= .05) %>% 
+  rownames_to_column(var = "rowname") %>% 
+  arrange(rowname) %>% 
+  filter((str_detect(rowname, "District 3")) |
+           str_detect(rowname, "District 8"))
 ```
 
-
+District 3, 8, 4.
 
