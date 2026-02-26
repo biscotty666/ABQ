@@ -6,7 +6,7 @@
 
   # https://devenv.sh/packages/
   packages = with pkgs;
-    [ git rstudio pandoc quarto texliveMedium ] ++ (with rPackages; [
+    [ brave git rstudio pandoc quarto texliveMedium ] ++ (with rPackages; [
       styler
       admisc
       car
@@ -19,6 +19,7 @@
       # ggsci
       GGally
       ggpubr
+      ggridges
       ggspatial
       ggtext
       # ggthemes
@@ -44,6 +45,7 @@
       tidyverse
       tmap
       units
+      webshot2
       zeallot
     ]);
 

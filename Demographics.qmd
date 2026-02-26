@@ -573,7 +573,7 @@ In each row, the darkest red are the lowest values, and the darkest blue are the
 ```{r abq-demo-as-tbl-2}
 #| code-fold: true
 #| code-summary: "Show the code"
-age_sex_dist %>%
+dist_age_table <- age_sex_dist %>%
   filter(district != "Los Ranchos") %>%
   mutate(district = str_replace(district, "District", "Dist")) %>%
   prepare_tables("district", "agegroup") %>%
@@ -583,6 +583,12 @@ age_sex_dist %>%
     title = "**Comparison of Agegroups**",
     subtitle = "Percent by District"
   )
+dist_age_table
+```
+
+```{r}
+#| eval: false
+gtsave(dist_age_table, "images/age_dist.png")
 ```
 
 

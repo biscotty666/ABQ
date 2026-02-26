@@ -3,7 +3,6 @@ title: "AgeSex"
 format: html
 ---
 
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, paged.print = FALSE)
 ```
@@ -14,7 +13,7 @@ In the [last article](https://biscotty.net/posts/data-science/r-census/abq-demog
 
 # Setup
 
-I will begin by loading the required libraries, as well as the datasets created from the last session. I'll 
+I will begin by loading the required libraries, as well as the datasets created from the last session. I'll need to pivot the data so that the variables are columns.
 
 ```{r}
 #| message: false
@@ -41,158 +40,397 @@ process <- function(df, var) {
     ungroup()
 }
 
-tmp <- st_read("data/abq_demographics.gpkg",
-               layer = "age_sex_dist")
-
 c(abq_age, abq_sex, abq_edu) %<-%
   map2(
-    c("age_sex_dist", "age_sex_dist", "edu_dist"),
+    c("age_sex_dist_sf", "age_sex_dist_sf", "edu_dist_sf"),
     c("agegroup", "sex", "education"),
     \(layer, variable) st_read("data/abq_demographics.gpkg", layer = layer) %>%
       process(variable) %>% 
       filter(district != "Los Ranchos")
   )
+
+districts_sf <- st_read("data/abq_demographics.gpkg", 
+                        layer = "council_dists") %>% 
+  filter(district != "Los Ranchos")
 ```
-
-```{r}
-dist_levels <- unique(abq_sex$district) %>% 
-  sort()
-abq_sex <- abq_sex %>% 
-  mutate(Total = Female + Male,
-         Female.pct = Female / Total,
-         district = factor(district, levels = dist_levels))
-
-```
-
-```{r}
-abq_sex %>% 
-  ggboxplot("district", "Female.pct", fill = "district")
-```
-
-```{r}
-shapiro_test(abq_sex$Female.pct)
-plotNormalHistogram(abq_sex$Female.pct)
-```
-
-```{r}
-abq_sex$Female.pct.NST <- blom(abq_sex$Female.pct)
-plotNormalHistogram(abq_sex$Female.pct.NST)
-```
-
-```{r}
-shapiro_test(abq_sex$Female.pct.NST)
-```
-
-
-```{r}
-result <- aov(Female.pct.NST ~ district, data = abq_sex)
-summary(result)
-```
-
-```{r}
-tmp <- abq_age %>% 
-  left_join(abq_sex, by = c("geoid", "district"))
-```
-
-```{r}
-cols_gt_55 <- names(abq_age)[12:15]
-tmp <- tmp %>% 
-  mutate(Over.54 = rowSums(across(all_of(cols_gt_55)), na.rm = T),
-         Over.54.pct = Over.54 / Total)
-```
-
 
 
 # Age Levels
 
+There seemed to be significant variation across council districts, particularly in certain age groups. District 3, in particular, seemed to have many more children and youth, and a lot less older people, who seemed to be more concentrated in District 8. Here are the tables comparing the districts.
+
+![](images/age_dist.png){width="600"}
+
+![](images/edu_dist.png){width="600"}
+
+I will look specifically at people under 20 and over 54. I will calculate the percentage of the population in each district which fall into these groups.
+
 ```{r}
-under_20_cols <- names(abq_age)[c(3:5, 11, 16)]
+under_20_cols <- names(abq_age)[c(4:6, 12, 17)]
+cols_gt_55 <- names(abq_age)[13:16]
 dist_levels <- unique(abq_age$district) %>% 
   sort()
 abq_age <- abq_age %>% 
   mutate(district = factor(district, levels = dist_levels),
          Total = rowSums(across(where(is.numeric)), na.rm = T),
          Under.20 = rowSums(across(all_of(under_20_cols)), na.rm = T),
-         Under.20.pct = Under.20 / Total)
+         Under.20.pct = Under.20 / Total,
+         Over.54 = rowSums(across(all_of(cols_gt_55)), na.rm = T),
+         Over.54.pct = Over.54 / Total,
+         Under.20 = rowSums(across(all_of(under_20_cols)), na.rm = T))
+```
 
-summary(abq_age)
+Let's take a look at the kids first. District 3 again seems quite different from the others.
+
+## Visualization
+
+```{r}
+abq_age %>% 
+  ggboxplot("district", "Under.20.pct", fill = "district") +
+  geom_point(position = position_jitter(width = .1))
 ```
 
 ```{r}
 abq_age %>% 
-  ggboxplot("district", "Under.20.pct", fill = "district")
+  ggboxplot("district", "Over.54.pct", fill = "district") +
+  geom_point(position = position_jitter(width = .1))
 ```
 
 ```{r}
-result <- aov(Under.20.pct ~ district, data = abq_age)
+map_demo_nl <- function(sf, pct = T) {
+  dist_plot(council_dists) +
+    {
+      if (pct) {
+        geom_sf(data = sf, aes(fill = percent), alpha = 0.35)
+      } else {
+        geom_sf(data = sf, aes(fill = value), alpha = 0.35)
+      }
+    } +
+    {
+      if (pct) {
+        scale_fill_viridis_c(labels = scales::label_percent())
+      } else {
+        scale_fill_viridis_c(labels = scales::label_comma())
+      }
+    } +
+    geom_sf_label(
+      data = council_dists,
+      aes(label = district), fontface = "bold",
+      nudge_y = 1000, nudge_x = -500, fill = "gray",
+      label.padding = unit(0.1, "lines"), size = 3.5
+    ) +
+    guides(color = "none") +
+    labs(
+      title = ifelse(pct, "Percentage of the population", "Population"),
+      caption = source,
+      fill = NULL
+    )
+}
+```
+
+```{r}
+#| message: false
+abq_age %>% 
+  mutate(percent = Under.20.pct) %>% 
+  map_demo_nl() +
+  scale_fill_viridis_c(limits = c(0.1, 0.6),
+                       labels = scales::label_percent())
+```
+
+```{r}
+#| message: false
+abq_age %>% 
+  mutate(value = Under.20) %>% 
+  map_demo_nl(pct = F)
+
++
+  scale_fill_viridis_c(limits = c(0.1, 0.6),
+                       labels = scales::label_percent())
+```
+
+```{r}
+abq_age %>% 
+  mutate(percent = Over.54.pct) %>% 
+  filter(percent < 0.7) %>% 
+  map_demo_nl() +
+  scale_fill_viridis_c(limits = c(0.1, 0.6),
+                       labels = scales::label_percent())
+```
+
+```{r}
+abq_age %>% 
+  mutate(percent = Under.20.pct) %>% 
+  map_demo_nl() +
+  scale_fill_viridis_c(limits = c(0.1, 0.55),
+                       labels = scales::label_percent())
+```
+
+
+In order to analyze the variance, the data should be normally distributed. Lets see if this is so.
+
+```{r}
+map(list(abq_age$Under.20.pct, abq_age$Over.54.pct),
+    \(x) shapiro_test(x))
+```
+
+The data is apparently not normally distributed. Let's take a look.
+
+```{r}
+plotNormalHistogram(abq_age$Under.20.pct)
+ggqqplot(abq_age$Under.20.pct)
+plotNormalHistogram(abq_age$Over.54.pct)
+ggqqplot(abq_age$Over.54.pct)
+```
+
+Indeed, this isn't normal. The Elfving transformation from the `rcompanion` package can transform this into a normal distribution. The Elfving transformation is qnorm((rank(x) - pi/8)/(N - pi/4 + 1)), where x is the original data, N is the number of observations, and pi is the constant pi. – Sal Mangiafico
+
+```{r}
+abq_age$Under.20.pct.ELF <- blom(abq_age$Under.20.pct)
+abq_age$Over.54.pct.ELF <- blom(abq_age$Over.54.pct)
+plotNormalHistogram(abq_age$Under.20.pct.ELF)
+plotNormalHistogram(abq_age$Over.54.pct)
+```
+
+```{r}
+abq_age %>% 
+  ggboxplot("district", "Under.20.pct.ELF", fill = "district") +
+  geom_point(position = position_jitter(width = .1))
+abq_age %>% 
+  ggboxplot("district", "Over.54.pct.ELF", fill = "district") +
+  geom_point(position = position_jitter(width = .1))
+```
+
+That looks better. Let's test it.
+
+```{r}
+map(list(abq_age$Under.20.pct.ELF, abq_age$Over.54.pct.ELF),
+    \(x) shapiro_test(x))
+```
+
+This looks good. Now I'll to the analysis of variance.
+
+```{r}
+aov_under_20_pct <- aov(Under.20.pct.ELF ~ district, data = abq_age)
+summary(aov_under_20_pct)
+aov_over_54_pct <- aov(Over.54.pct.ELF ~ district, data = abq_age)
+summary(aov_over_54_pct)
+```
+
+The results do show a statistical difference between the districts. Tukey's HSD can show us where.
+
+```{r}
+TukeyHSD(aov_under_20_pct)[[1]] %>% 
+  as.data.frame() %>% 
+  filter(`p adj` <= .05)
+TukeyHSD(aov_over_54_pct)[[1]] %>% 
+  as.data.frame() %>% 
+  filter(`p adj` <= .05)
+```
+
+Indeed, there is a statistically significant different between District 3 and most of the others. Out of curiosity, I will perform the test on the untransformed data.
+
+The Kruskal-Wallis Test uses the following null and alternative hypotheses:
+
+The null hypothesis (H0): The median is equal across all groups.
+
+The alternative hypothesis: (HA): The median is not equal across all groups
+
+```{r}
+kruskal.test(Under.20.pct ~ district, data = abq_age)
+kruskal.test(Over.54.pct ~ district, data = abq_age)
+```
+
+```{r}
+#| message: false
+#| warning: false
+library(ggridges)
+plot_dist_ridge <- function(df, var) {
+  ggplot(df, aes(
+    x = .data[[var]], y = district,
+    fill = factor(stat(quantile))
+  )) +
+    stat_density_ridges(
+      geom = "density_ridges_gradient", calc_ecdf = TRUE,
+      quantiles = 4, quantile_lines = TRUE, alpha = 0.7,
+      jittered_points = TRUE, position = "points_sina"
+    ) +
+    scale_fill_viridis_d(name = "Quartiles") +
+    theme(axis.title.x = element_blank())
+}
+
+map2(list("Under.20.pct", "Over.54.pct"),
+     list("Population Percent under 20 years old",
+          "Population Percent over 54 years old"),
+     \(x, y) abq_age %>% 
+       plot_dist_ridge(x) +
+       labs(title = y))
+```
+
+
+```{r}
+#| warning: false
+pairwise.wilcox.test(
+  abq_age$Under.20.pct, abq_age$district,
+  p.adjust.method = "holm"
+) %>% 
+  tidy() %>% 
+  filter(p.value <= .05)
+pairwise.wilcox.test(
+  abq_age$Over.54.pct, abq_age$district,
+  p.adjust.method = "holm"
+) %>% 
+  tidy() %>% 
+  filter(p.value <= .05)
+```
+
+
+This reveals almost the same results. I should also check for equality of variance.
+
+```{r}
+map(list(abq_age$Under.20.pct, abq_age$Over.54.pct,
+         abq_age$Under.20.pct.ELF, abq_age$Over.54.pct.ELF),
+    \(x) bartlett.test(x, abq_age$district))
+```
+
+```{r}
+# Density plot
+ggplot(abq_age, aes(x = Under.20.pct, fill = district)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Density Plot of Values by Group", x = "Value", y = "Density") +
+  theme_minimal()
+```
+
+
+Bartlett's test fails to reject the null hypothesis that all variances are equal. I'll create a linear model to get a sense of the explanatory power of this variable.
+
+```{r}
+lm(Under.20.pct.ELF ~ district, data = abq_age) %>% 
+  summary()
+```
+
+## Older
+
+Again, some of these relationships are significant, but the overall explanatory value is low, with an adusted R-squared of only .114. I'll repeat the analysis for the older age group.
+
+```{r}
+shapiro_test(abq_age$Over.54.pct)
+```
+
+```{r}
+abq_age$Over.54.pct.ELF <- blom(abq_age$Over.54.pct)
+plotNormalHistogram(abq_age$Over.54.pct.ELF)
+```
+
+```{r}
+abq_age %>% 
+  ggboxplot("district", "Over.54.pct.ELF", fill = "district")
+```
+
+```{r}
+shapiro_test(abq_age$Over.54.pct.ELF)
+```
+
+```{r}
+result <- aov(Over.54.pct.ELF ~ district, data = abq_age)
 summary(result)
 ```
 
 ```{r}
-result_tk <- TukeyHSD(result)
-subset(result_tk[[1]], result_tk[[1]][, 4] < .05)
+TukeyHSD(result)[[1]] %>% 
+  as.data.frame() %>% 
+  filter(`p adj` < .05)
 ```
 
-District 3-District 2, District 4-District 3, District 6-District 3, District 7-District 3,
-District 8-District 3, District 8-District 3
+There are significant differences here, but fewer.
 
 ```{r}
-c(district = , Under.20.pct = ) %<-%
-  abq_age
-
-bartlett.test(Under.20.pct, district)
-```
-
-The Elfving transformation is qnorm((rank(x) - pi/8)/(N - pi/4 + 1)), where x is the original data, N is the number of observations, and pi is the constant pi. – 
-Sal Mangiafico
-
-
-```{r}
-glm(formula = Under.20.pct ~ district, family = "quasibinomial",
-    data = abq_age) %>% summary()
+bartlett.test(abq_age$Over.54.pct.ELF, abq_age$district)
 ```
 
 ```{r}
-abq_age %>% 
-  shapiro_test(Under.20.pct)
+lm(Over.54.pct.ELF ~ district, data = abq_age) %>% 
+  summary()
 ```
 
-```{r}
-abq_age %>%
-  shapiro_test(Total)
-```
+As with the other age group, there is correlation, but little explanatory power.
 
 ```{r}
-ks.test(abq_age$Under.20.pct, "pnorm")
-```
-
-```{r}
-plotNormalHistogram(abq_age$Under.20.pct)
-```
-
-```{r}
-ggqqplot(abq_age$Under.20.pct)
-```
-
-```{r}
-abq_age$Under.20.pct.NST <- blom(abq_age$Under.20.pct)
-plotNormalHistogram(abq_age$Under.20.pct.NST)
+kruskal.test(Over.54.pct ~ district, data = abq_age)
 ```
 
 
 ```{r}
-ggqqplot(abq_age$Over.54.pct.NST)
+#| warning: false
+tmp <- pairwise.wilcox.test(
+  abq_age$Over.54.pct, abq_age$district,
+  p.adjust.method = "holm"
+)
+tidy(tmp) %>% 
+  filter(p.value <= .05)
+```
+
+
+
+```{r}
+nb <- poly2nb(abq_age, queen = F)
+nbw <- nb2listw(nb, style = "W", zero.policy = T)
+(gmoran <- moran.test(abq_age$Under.20.pct, 
+                      nbw,
+                      alternative = "two.sided",
+                      na.action = na.omit))
+```
+
+The p-value suggest that there is positive spatial autocorrelation.
+
+```{r}
+abq_age$Under.20.pct <- if_else(is.na(abq_age$Under.20.pct),
+                                0, abq_age$Under.20.pct)
+lmoran <- localmoran(abq_age$Under.20.pct, nbw,
+                     alternative = "two.sided", na.action = na.omit,
+                      zero.policy=attr(nbw, "zero.policy"))
+
+abq_age$lmI <- lmoran[, "Ii"] # local Moran's I
+abq_age$lmZ <- lmoran[, "Z.Ii"] # z-scores
+abq_age$lmp <- lmoran[, "Pr(z != E(Ii))"]
+names(lmoran)
+library(tmap)
+p1 <- tm_shape(abq_age) +
+  tm_polygons(col = "Under.20.pct", title = "vble", style = "quantile") +
+  tm_layout(legend.outside = TRUE)
+
+p2 <- tm_shape(abq_age) +
+  tm_polygons(col = "lmI", title = "Local Moran's I",
+              style = "quantile") +
+  tm_layout(legend.outside = TRUE)
+
+p3 <- tm_shape(abq_age) +
+  tm_polygons(col = "lmZ", title = "Z-score",
+              breaks = c(-Inf, 1.65, Inf)) +
+  tm_layout(legend.outside = TRUE)
+
+p4 <- tm_shape(abq_age) +
+  tm_polygons(col = "lmp", title = "p-value",
+              breaks = c(-Inf, 0.05, Inf)) +
+  tm_layout(legend.outside = TRUE)
+
+tmap_arrange(p1, p2, p3, p4)
+
 ```
 
 ```{r}
-abq_age %>% 
-  shapiro_test(Under.20.pct.NST)
+tmap5 <- tm_shape(abq_age) + 
+  tm_polygons(col = "lmZ",
+              title = "Local Moran's I", 
+              style = "fixed",
+              breaks = c(-Inf, -1.96, 1.96, Inf),
+              labels = c("Negative SAC", "No SAC", "Positive SAC"),
+              palette =  c("blue", "white", "red")) +
+  tm_layout(legend.outside = TRUE)
+
+# ttm()
+tmap5
 ```
 
-```{r}
-abq_age %>% 
-  ggpubr::ggboxplot("district", "Under.20.pct.NST", fill = "district")
-```
 
 ```{r}
 result <- aov(Under.20.pct.NST ~ district, data = abq_age)
@@ -203,8 +441,7 @@ summary(result)
 (result_tk <- TukeyHSD(result))
 ```
 
-District 3-District 2, District 4-District 3, District 6-District 3, District 7-District 3,
-District 8-District 3, District 8-District 3
+District 3-District 2, District 4-District 3, District 6-District 3, District 7-District 3, District 8-District 3, District 8-District 3
 
 ```{r}
 c(district = , Under.20.pct.NST = ) %<-%
@@ -218,10 +455,7 @@ summary(abq_age$Under.20.pct.NST)
 ```
 
 ```{r}
-cols_gt_55 <- names(abq_age)[12:15]
-abq_age <- abq_age %>% 
-  mutate(Over.54 = rowSums(across(all_of(cols_gt_55)), na.rm = T),
-         Over.54.pct = Over.54 / Total)
+
 ```
 
 ```{r}
@@ -236,7 +470,6 @@ shapiro.test(abq_age$Over.54.pct)
 abq_age$Over.54.pct.NST <- blom(abq_age$Over.54.pct)
 plotNormalHistogram(abq_age$Over.54.pct.NST)
 ```
-
 
 ```{r}
 shapiro_test(abq_age$Over.54.pct.NST)
@@ -284,13 +517,16 @@ names(abq_edu)
 ```
 
 ```{r}
-col_degree <- names(abq_edu)[c(4, 5, 7, 9)]
-no_degree <- names(abq_edu)[c(6, 8)]
+adv_degree <- names(abq_edu)[c(6, 8, 10)]
+col_degree <- c(names(abq_edu)[5], adv_degree)
+no_degree <- names(abq_edu)[c(7, 9)]
 abq_edu <- abq_edu %>% 
   mutate(district = factor(district, levels = dist_levels),
          Total = rowSums(across(where(is.numeric))),
          College.Degree = rowSums(across(all_of(col_degree)), na.rm = T),
-         College.Degree.pct = Advanced.Degree / Total,
+         College.Degree.pct = College.Degree / Total,
+         Advanced.Degree = rowSums(across(all_of(adv_degree)), na.rm = T),
+         Advanced.Degree.pct = Advanced.Degree / Total,
          No.Degree = rowSums(across(all_of(no_degree)), na.rm = T),
          No.Degree.pct = No.Degree / Total)
 abq_edu
@@ -298,19 +534,25 @@ abq_edu
 
 ```{r}
 shapiro_test(abq_edu$Advanced.Degree.pct)
+shapiro_test(abq_edu$College.Degree.pct)
+shapiro_test(abq_edu$No.Degree.pct)
 ```
 
-
 ```{r}
-abq_edu$Advanced.Degree.pct.NST <- blom(abq_edu$Advanced.Degree.pct)
-plotNormalHistogram(abq_edu$Advanced.Degree.pct.NST)
-shapiro_test(abq_edu$Advanced.Degree.pct.NST)
+abq_edu$Advanced.Degree.pct.ELF <- blom(abq_edu$Advanced.Degree.pct)
+abq_edu$College.Degree.pct.ELF <- blom(abq_edu$College.Degree.pct)
+plotNormalHistogram(abq_edu$Advanced.Degree)
+shapiro_test(abq_edu$Advanced.Degree.pct.ELF)
 ```
 
 ```{r}
 abq_edu$No.Degree.pct.NST <- blom(abq_edu$No.Degree.pct)
-plotNormalHistogram(abq_edu$No.Degree.pct.NST)
-shapiro_test(abq_edu$No.Degree.pct.NST)
+plotNormalHistogram(abq_edu$No.Degree.pct)
+shapiro_test(abq_edu$No.Degree.pct)
+```
+
+```{r}
+kruskal.test(Advanced.Degree ~ district, data = abq_edu)
 ```
 
 
@@ -328,7 +570,6 @@ abq_edu %>%
 result <- aov(Advanced.Degree.pct.NST ~ district, data = abq_edu)
 summary(result)
 ```
-
 
 ```{r}
 result_tk <- TukeyHSD(result)
@@ -352,4 +593,3 @@ result_tk %>%
 ```
 
 District 3, 8, 4.
-
