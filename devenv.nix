@@ -25,6 +25,7 @@
       # ggthemes
       gt
       gtExtras
+      IOLS
       janitor
       nngeo
       nortest
