@@ -42,10 +42,11 @@ year <- 2023
 caption <- str_glue("Source: census.gov, acs5, {year}")
 ```
 
+
 ```{r}
 age_sex_labels <- get_labels("B01001A")
 
-age_abq <-    
+abq_age <-    
   get_tables("tract", "B01001A", age_sex_labels, geometry = T) %>%
   st_transform(crs) %>%
   mutate(area = st_area(.)) %>%
@@ -62,13 +63,6 @@ age_abq <-
   filter(as.numeric(area_pct) > .01) %>% 
   select(-c(area, area_split, area_pct))
 ```
-
-```{r}
-abq_age <- age_abq
-```
-
-
-
 # Age Levels
 
 There seemed to be significant variation across council districts, particularly in certain age groups. District 3, in particular, seemed to have many more children and youth, and a lot less older people, who seemed to be more concentrated in District 8. Here are the tables comparing the districts.
@@ -78,11 +72,6 @@ There seemed to be significant variation across council districts, particularly 
 ![](images/edu_dist.png){width="600"}
 
 I will look specifically at people under 20 and over 54, and calculate the percentage of the population in each district which fall into these groups.
-
-```{r}
-abq_age <- age_abq
-names(abq_age)
-```
 
 
 ```{r}
@@ -163,6 +152,21 @@ map(list(abq_age$Under.20.pct, abq_age$Over.54.pct),
 ```
 
 The low p-value suggests that the null hypothesis is false, and the data is not normally distributed.
+
+```{r}
+map(
+  list(log(abq_age$Under.20.pct + 1), 
+       log(abq_age$Over.54.pct + 1)),
+  \(x) shapiro_test(x)
+)
+```
+
+```{r}
+temp <- abq_age %>% 
+  mutate(Under.20.pct.log = log(Under.20.pct + 1))
+plot_hist(temp, "Under.20.pct.log")
+```
+
 
 ## Transforming
 
@@ -302,6 +306,10 @@ lm(Over.54.pct.ELF ~ district, data = abq_age) %>%
   summary()
 ```
 
+```{r}
+
+```
+
 
 # Education
 
@@ -437,12 +445,53 @@ map(cols_list,
     \(x) shapiro_test(x))
 ```
 
+```{r}
+abq_edu <- abq_edu %>% 
+  mutate(
+    College.Degree.pct.log = log(College.Degree.pct + 1),
+    Advanced.Degree.pct.log = log(Advanced.Degree.pct + 1)
+  )
+names(abq_edu)
+cols_str <- names(abq_edu)[c(17, 20, 21)]
+cols_list <- list(
+  abq_edu$No.Degree.pct, abq_edu$College.Degree.pct.log,
+  abq_edu$Advanced.Degree.pct.log
+)
+
+c(p1, p2, p3) %<-%
+  map(
+    cols_str,
+    \(x) plot_hist(abq_edu, x)
+  )
+c(p4, p5, p6) %<-%
+  map(
+    cols_list,
+    \(x) ggqqplot(x)
+  )
+
+(p1 + p4) /
+  (p2 + p5) /
+  (p3 + p6)
+```
+
+```{r}
+map(
+  cols_list,
+  \(x) shapiro_test(x)
+)
+```
+
+
 This looks good. I should also check for equality of variance.
 
 ```{r}
-map(list(abq_age$Under.20.pct, abq_age$Over.54.pct,
-         abq_age$Under.20.pct.ELF, abq_age$Over.54.pct.ELF),
-    \(x) bartlett.test(x, abq_age$district))
+cols_str <- names(abq_edu)[17:18]
+cols_list <- list(
+  abq_edu$No.Degree.pct, 
+  abq_edu$College.Degree.pct.ELF
+)
+map(cols_list,
+    \(x) bartlett.test(x, abq_edu$district))
 ```
 
 The untransformed data did not show homogeneity of variance, but the transformed data does. Now I'll to the analysis of variance.
@@ -450,14 +499,14 @@ The untransformed data did not show homogeneity of variance, but the transformed
 ## AOV
 
 ```{r}
-c(aov_under_20_pct, aov_over_54_pct) %<-%
+c(aov_No.Degree_pct, aov_College.Degree.pct.ELF) %<-%
   map(
-    list("Under.20.pct.ELF", "Over.54.pct.ELF"),
+    cols_str,
     \(x) aov(as.formula(glue("{x} ~ district")),
-      data = abq_age
+      data = abq_edu
     )
   )
-map(list(aov_under_20_pct, aov_over_54_pct),
+map(list(aov_No.Degree_pct, aov_College.Degree.pct.ELF),
     \(x) summary(x))
 ```
 
@@ -465,7 +514,7 @@ The results do show a statistical difference between the districts. Tukey's HSD 
 
 ```{r}
 map(
-  list(aov_under_20_pct, aov_over_54_pct),
+  list(aov_No.Degree_pct, aov_College.Degree.pct.ELF),
   \(x) TukeyHSD(x)[[1]] %>%
     as.data.frame() %>%
     filter(`p adj` <= .05)
@@ -482,36 +531,20 @@ The alternative hypothesis: (HA): The median is not equal across all groups
 
 ```{r}
 map(
-    list("Under.20.pct", "Over.54.pct",
-         "Under.20.pct.ELF", "Over.54.pct.ELF"),
+    cols_str,
     \(x) kruskal.test(as.formula(glue("{x} ~ district")),
-      data = abq_age
+      data = abq_edu
     ))
 ```
 
 ```{r}
 #| message: false
 #| warning: false
-library(ggridges)
-plot_dist_ridge <- function(df, var) {
-  ggplot(df, aes(
-    x = .data[[var]], y = district,
-    fill = factor(stat(quantile))
-  )) +
-    stat_density_ridges(
-      geom = "density_ridges_gradient", calc_ecdf = TRUE,
-      quantiles = 4, quantile_lines = TRUE, alpha = 0.7,
-      jittered_points = TRUE, position = "points_sina"
-    ) +
-    scale_fill_viridis_d(name = "Quartiles") +
-    theme(axis.title.x = element_blank())
-}
-
 c(p1, p2) %<-%
-map2(list("Under.20.pct", "Over.54.pct"),
-     list("Population Percent under 20 years old",
-          "Population Percent over 54 years old"),
-     \(x, y) abq_age %>% 
+map2(cols_str[1:2],
+     list("Population Percent No Degree",
+          "Population Percent College Degree"),
+     \(x, y) abq_edu %>% 
        plot_dist_ridge(x) +
        labs(title = y))
 p1; p2
@@ -520,9 +553,9 @@ p1; p2
 
 ```{r}
 #| warning: false
-map(list(abq_age$Under.20.pct, abq_age$Over.54.pct),
+map(cols_list,
     \(x) pairwise.wilcox.test(
-  x, abq_age$district,
+  x, abq_edu$district,
   p.adjust.method = "holm"
 ) %>% 
   tidy() %>% 
@@ -536,9 +569,11 @@ This reveals almost the same results.
 Bartlett's test fails to reject the null hypothesis that all variances are equal. I'll create a linear model to get a sense of the explanatory power of this variable.
 
 ```{r}
-lm(Under.20.pct.ELF ~ district, data = abq_age) %>% 
-  summary()
-lm(Over.54.pct.ELF ~ district, data = abq_age) %>% 
-  summary()
+map(
+    cols_str,
+    \(x) lm(as.formula(glue("{x} ~ district")),
+      data = abq_edu
+    ) %>% summary()
+  )
 ```
 
