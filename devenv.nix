@@ -7,7 +7,10 @@
   # https://devenv.sh/packages/
   packages = with pkgs;
     [ brave git rstudio pandoc quarto texliveMedium ] ++ (with rPackages; [
-      styler
+      # ggsci
+      # ggthemes
+      GGally
+      IOLS
       admisc
       car
       classInt
@@ -16,16 +19,12 @@
       devtools
       geofacet
       geojsonsf
-      # ggsci
-      GGally
       ggpubr
       ggridges
       ggspatial
       ggtext
-      # ggthemes
       gt
       gtExtras
-      IOLS
       janitor
       nngeo
       nortest
@@ -39,9 +38,11 @@
       roxygen2
       rstatix
       rvest
+      segregation
       sf
       spData
       spdep
+      styler
       tidycensus
       tidyverse
       tmap
