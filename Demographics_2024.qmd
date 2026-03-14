@@ -1126,11 +1126,10 @@ data_sets <- c(
   "age_sex_bern", "edu_bern", "race_bern",
   "age_sex_dist_sf", "edu_dist_sf", "race_dist_sf", "council_dists"
 )
-st_write(edu_bern, "data/abq_demographics.gpkg", layer = "edu_bern_2024")
 walk2(
   map(data_sets, \(x) get(x)),
   data_sets,
-  \(df, level) st_write(df, "data/abq_demographics.gpkg",
+  \(df, level) st_write(df, "data/abq_demographics_2024.gpkg",
     layer = level, append = F
   )
 )

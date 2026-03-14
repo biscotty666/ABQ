@@ -9,11 +9,11 @@ knitr::opts_chunk$set(echo = TRUE, paged.print = FALSE)
 
 # Introduction
 
-In the [last article](https://biscotty.net/posts/data-science/r-census/abq-demographics) I looked at age, race, and educational attainment in Albuquerque, with a particular focus on differences between council districts. In some cases, the variation was striking. In particular, the third district seemed quite different from the others in a number of ways. Now I would like to apply some statistical testing to see if this impression is valid.
+In the [last article](https://biscotty.net/posts/data-science/r-census/abq-demographics) I compared age, race, and educational attainment between council districts in Albuquerque. In some cases, the variation was striking. In particular, the third district seemed quite different from the others in a number of ways. Now I would like to apply some statistical testing to see if this impression is backed up statistically.
 
 # Setup
 
-I will begin by loading the required libraries, the functions created last time, and some of the datasets from the last session. I'll need to pivot the data so that the variables are columns.
+I will begin by loading the required libraries, the functions created last time, and some of the datasets from the last session. I'll need to pivot the data, because I'd like the variables to be in columns.
 
 ```{r}
 #| message: false
@@ -37,35 +37,49 @@ source("demographic-functions.R")
 council_dists <- st_read("data/abq_demographics.gpkg", 
                         layer = "council_dists") %>% 
   filter(district != "Los Ranchos")
-crs <- 6528
-year <- 2023
-caption <- str_glue("Source: census.gov, acs5, {year}")
+# crs <- 6528
+# year <- 2023
+# caption <- str_glue("Source: census.gov, acs5, {year}")
 ```
 
+I'll use the `split_dists` function from last time. I will also combine male and female. I re-ran the functions for 2024 in order to compare the two years. Since I will be doing the same thing later for education, I'll make functions to process the data.
+
+The `split_dists` function leaves numerous "fragments" of tracts which are too small to be assigned any data. I will remove any records which represent less than 1% of the area of a given tract.
+
+I'll use the `%<-%` function from `zeallot` to create and modify data frames. `map` and its variants return lists. By providing a vector of variable names on the left hand side of `%<-%`, `map`'s list will be de-structured and assigned to the variable names. 
 
 ```{r}
-age_sex_bern <-  st_read("data/abq_demographics.gpkg", 
-                        layer = "age_sex_bern")
-age_sex_bern_2024 <-  st_read("data/abq_demographics.gpkg", 
-                        layer = "age_sex_bern_2024")
+age_sex_bern_2023 <- st_read("data/abq_demographics.gpkg",
+  layer = "age_sex_bern"
+)
 
-process_age <- function(df) {
+age_sex_bern_2024 <- st_read("data/abq_demographics.gpkg",
+  layer = "age_sex_bern_2024"
+)
+
+pre_process <- function(df, variable) {
   df %>%
-    group_by(geoid, agegroup) %>%
+    group_by_at(c("geoid", variable))  %>%
     summarise(value = sum(value)) %>%
     ungroup() %>%
-    mutate(area = st_area(.)) %>%
-    split_dists() %>%
+    mutate(area = st_area(.))
+}
+
+post_process <- function(df, variable) {
+   df %>%
+    filter(district != "Los Ranchos") %>% 
     select(-value) %>%
-    pivot_wider(names_from = agegroup, values_from = new_value) %>%
+    pivot_wider(names_from = .data[[variable]], values_from = new_value) %>%
     filter(as.numeric(area_pct) > .01) %>%
-    select(-c(area, area_split, area_pct)) %>% 
-    filter(district != "Los Ranchos")
+    select(-c(area, area_split, area_pct))
 }
 
 c(abq_age_2023, abq_age_2024) %<-%
-  map(list(age_sex_bern, age_sex_bern_2024),
-      process_age)
+  map(list(age_sex_bern_2023, age_sex_bern_2024),
+      \(x) x %>% 
+        pre_process("agegroup") %>% 
+        split_dists() %>% 
+        post_process("agegroup"))
 ```
 
 # Age Levels
@@ -76,7 +90,7 @@ There seemed to be significant variation across council districts, particularly 
 
 ![](images/edu_dist.png){width="600"}
 
-I will look specifically at people under 20 and over 54, and calculate the percentage of the population in each district which fall into these groups.
+I want to look specifically at people under 20 and over 54, so I will calculate the percentage of the population in each district which fall into these groups.
 
 
 ```{r}
@@ -112,44 +126,38 @@ abq_age_2024 %>%
 
 ## Checking the distributions
 
-A look at the variables show that the distributions in each district doesn't look normal, and varies considerably between districts.
+A look at the variables shows that the distributions in each district don't look normal, and vary considerably between districts.
 
 ```{r}
 age_list_str <- list("Under.20.pct", "Over.54.pct")
+age_list_df <- list(abq_age_2023, abq_age_2024)
+```
+
+```{r}
+rep(age_list_str, each = 2)
 ```
 
 
 ```{r}
 #| warning: false
 #| message: false
-c(p1, p2) %<-%
-  map(
-    age_list_str,
-    \(x) abq_age_2023 %>%
-      ggboxplot("district", x, fill = "district") +
-      geom_point(position = position_jitter(width = 0.1)) +
-      theme(axis.text.x = element_text(angle = 45, vjust = .5)) +
-      guides(fill = "none")
-  )
+c(p1, p2, p3, p4) %<-%
+  map2(
+    rep(age_list_df, each=2),
+    rep(age_list_str, 2),
+    \(x, y) x %>%
+        ggboxplot("district", y, fill = "district") +
+        geom_point(position = position_jitter(width = 0.1)) +
+        theme(axis.text.x = element_text(angle = 45, vjust = .5)) +
+        guides(fill = "none")
+    )
+
 (p1 + p2) + 
   plot_annotation(title = '2023')
-```
-
-```{r}
-#| warning: false
-#| message: false
-c(p1, p2) %<-%
-  map(
-    age_list_str,
-    \(x) abq_age_2024 %>%
-      ggboxplot("district", x, fill = "district") +
-      geom_point(position = position_jitter(width = 0.1)) +
-      theme(axis.text.x = element_text(angle = 45, vjust = .5)) +
-      guides(fill = "none")
-  )
-(p1 + p2) + 
+(p3 + p4) + 
   plot_annotation(title = '2024')
 ```
+
 ```{r}
 age_list_2023 <- list(abq_age_2023$Under.20.pct, 
                       abq_age_2023$Over.54.pct)
