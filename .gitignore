@@ -1,3 +1,4 @@
+data/
 *Rproj
 .Rhistory
 .Rproj.user
@@ -21,3 +22,4 @@ _freeze
 scratch/
 variance/
 spatial/
+.positai

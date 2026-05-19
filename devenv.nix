@@ -6,18 +6,19 @@
 
   # https://devenv.sh/packages/
   packages = with pkgs;
-    [ brave git rstudio pandoc quarto texliveMedium ] ++ (with rPackages; [
-      # ggsci
-      # ggthemes
+    [ git rstudio pandoc quarto texliveMedium ] ++ (with rPackages; [
+      palmerpenguins
+      reshape2
+      nnet
+      foreign
       GGally
-      IOLS
-      admisc
+      GWmodel
       car
       classInt
       corrr
+      crimedata
+      crimedatasets
       crsuggest
-      devtools
-      geofacet
       geojsonsf
       ggpubr
       ggridges
@@ -25,32 +26,38 @@
       ggtext
       gt
       gtExtras
+      hereR
       janitor
+      mapboxapi
       nngeo
-      nortest
-      pagedown
-      paletteer
+      osmdata
+      osrm
       patchwork
-      prettymapr
+      plotly
       rcompanion
-      rnaturalearth
-      rnaturalearthdata
-      roxygen2
+      # rnaturalearth
+      # rnaturalearthdata
+      # roxygen2
       rstatix
       rvest
+      scales
       segregation
       sf
-      spData
+      spatialreg
+      # spData
       spdep
       styler
+      survey
+      srvyr
       tidycensus
+      tidygeocoder
+      tidymodels
       tidyverse
       tmap
       units
       webshot2
       zeallot
     ]);
-
   # https://devenv.sh/languages/
   languages.r = {
     enable = true;
@@ -70,6 +77,7 @@
 
   # https://devenv.sh/basics/
   enterShell = ''
+    export CHROMOTE_CHROME=/run/current-system/sw/bin/brave
     hello         # Run scripts directly
     git --version # Use packages
   '';
