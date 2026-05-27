@@ -1,7 +1,7 @@
 {
   description = "A basic flake with a shell";
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     systems.url = "github:nix-systems/default";
     flake-utils = {
       url = "github:numtide/flake-utils";
@@ -18,16 +18,16 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          nativeBuildInputs = [ pkgs.bashInteractive ];
-          buildInputs = with pkgs; [
-            R
-            quarto
-            chromium
-            pandoc
-            texlive.combined.scheme-full
-            rstudio
-            (with rPackages; [
+          packages = builtins.attrValues {
+            inherit (pkgs)
+              R
               quarto
+              chromium
+              pandoc
+              rstudio
+              ;
+            inherit (pkgs.texlive.combined) scheme-medium;
+            inherit (pkgs.rPackages)
               palmerpenguins
               reshape2
               nnet
@@ -37,6 +37,7 @@
               car
               classInt
               corrr
+              collapse
               crimedata
               crimedatasets
               crsuggest
@@ -55,6 +56,7 @@
               osrm
               patchwork
               plotly
+              prettymapr
               rcompanion
               # rnaturalearth
               # rnaturalearthdata
@@ -78,8 +80,8 @@
               units
               webshot2
               zeallot
-            ])
-          ];
+              ;
+          };
         };
       }
     );
