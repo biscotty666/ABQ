@@ -1,5 +1,5 @@
 ---
-title: "AgeSex"
+title: "Age and Education"
 format: html
 ---
 
@@ -10,6 +10,11 @@ knitr::opts_chunk$set(echo = TRUE, paged.print = FALSE)
 # Introduction
 
 In the [last article](https://biscotty.net/posts/data-science/r-census/abq-demographics) I compared age, race, and educational attainment between council districts in Albuquerque. In some cases, the variation was striking. In particular, the third district seemed quite different from the others in a number of ways. Now I would like to apply some statistical testing to see if this impression is backed up statistically.
+
+```{r}
+??blom
+```
+
 
 # Setup
 
@@ -34,7 +39,7 @@ source("demographic-functions.R")
 
 ```{r}
 #| warning: false
-council_dists <- st_read("data/abq_demographics.gpkg", 
+council_dists <- st_read("data/abq_demographics_2023.gpkg", 
                         layer = "council_dists") %>% 
   filter(district != "Los Ranchos")
 # crs <- 6528
@@ -49,13 +54,16 @@ The `split_dists` function leaves numerous "fragments" of tracts which are too s
 I'll use the `%<-%` function from `zeallot` to create and modify data frames. `map` and its variants return lists. By providing a vector of variable names on the left hand side of `%<-%`, `map`'s list will be de-structured and assigned to the variable names. 
 
 ```{r}
-age_sex_bern_2023 <- st_read("data/abq_demographics.gpkg",
-  layer = "age_sex_bern"
-)
-
-age_sex_bern_2024 <- st_read("data/abq_demographics.gpkg",
-  layer = "age_sex_bern_2024"
-)
+#| warning: false
+#| message: false
+c(age_sex_bern_2023, age_sex_bern_2024) %<-%
+  map(
+    list(
+      "data/abq_demographics_2023.gpkg",
+      "data/abq_demographics_2024.gpkg"
+    ),
+    \(x) st_read(x, layer = "age_sex_bern")
+  )
 
 pre_process <- function(df, variable) {
   df %>%
@@ -86,9 +94,9 @@ c(abq_age_2023, abq_age_2024) %<-%
 
 There seemed to be significant variation across council districts, particularly in certain age groups. District 3, in particular, seemed to have many more children and youth, and a lot less older people, who seemed to be more concentrated in District 8. Here are the tables comparing the districts.
 
-![](images/age_dist.png){width="600"}
+![](images/age_dist_2024.png){width="600"}
 
-![](images/edu_dist.png){width="600"}
+![](images/edu_dist_2024.png){width="600"}
 
 I want to look specifically at people under 20 and over 54, so I will calculate the percentage of the population in each district which fall into these groups.
 
@@ -130,20 +138,19 @@ A look at the variables shows that the distributions in each district don't look
 
 ```{r}
 age_list_str <- list("Under.20.pct", "Over.54.pct")
-age_list_df <- list(abq_age_2023, abq_age_2024)
+age_list_dfs <- list(abq_age_2023, abq_age_2024)
+age_list_vars <- list(abq_age_2023$Under.20.pct, 
+                      abq_age_2023$Over.54.pct,
+                      abq_age_2024$Under.20.pct, 
+                      abq_age_2024$Over.54.pct)
 ```
-
-```{r}
-rep(age_list_str, each = 2)
-```
-
 
 ```{r}
 #| warning: false
 #| message: false
 c(p1, p2, p3, p4) %<-%
   map2(
-    rep(age_list_df, each=2),
+    rep(age_list_dfs, each = 2),
     rep(age_list_str, 2),
     \(x, y) x %>%
         ggboxplot("district", y, fill = "district") +
@@ -157,14 +164,6 @@ c(p1, p2, p3, p4) %<-%
 (p3 + p4) + 
   plot_annotation(title = '2024')
 ```
-
-```{r}
-age_list_2023 <- list(abq_age_2023$Under.20.pct, 
-                      abq_age_2023$Over.54.pct)
-age_list_2024 <- list(abq_age_2024$Under.20.pct, 
-                      abq_age_2024$Over.54.pct)
-```
-
 
 ```{r}
 #| warning: false
@@ -181,61 +180,39 @@ plot_hist <- function(df, var) {
 
 ```{r}
 #| warning: false
-c(p1, p2) %<-%
-  map(
-    age_list_str,
-    \(x) plot_hist(abq_age_2023, x)
+c(p1, p2, p3, p4) %<-%
+  map2(
+    rep(age_list_dfs, each = 2),
+    rep(age_list_str, 2),
+    \(x, y) plot_hist(x, y)
   )
-c(p3, p4) %<-%
+c(p5, p6, p7, p8) %<-%
   map(
-    age_list_2023,
+    age_list_vars,
     \(x) ggqqplot(x)
   )
 
-(p1 + p3) /
-  (p2 + p4) + 
+(p1 + p5) /
+  (p2 + p6) + 
   plot_annotation(title = '2023')
-```
-
-```{r}
-#| warning: false
-c(p1, p2) %<-%
-  map(
-    age_list_str,
-    \(x) plot_hist(abq_age_2024, x)
-  )
-c(p3, p4) %<-%
-  map(
-    age_list_2024,
-    \(x) ggqqplot(x)
-  )
-
-(p1 + p3) /
-  (p2 + p4) + 
+(p3 + p7) /
+  (p4 + p8) + 
   plot_annotation(title = '2024')
 ```
 
-
-
-In order to analyze the variance, the data should be normally distributed. Lets see if this is so. The null hypothesis in the Shapiro-Wilk test is that the data is normally distributed.
+In order to analyze the variance, the data should be normally distributed. Lets see if this is so. The null hypothesis in the Shapiro-Wilks test is that the data is normally distributed.
 
 ```{r}
-map(age_list_2023,
-    \(x) shapiro_test(x))
+map(age_list_vars, shapiro_test)
 ```
 
-```{r}
-map(age_list_2024,
-    \(x) shapiro_test(x))
-```
-
-The low p-value suggests that the null hypothesis is false, and the data is not normally distributed.
+The low p-values suggests that the null hypothesis is false, and the data is not normally distributed, with the exception of the older-than-54 category in 2024.
 
 A simple log transformation does not help.
 
 ```{r}
 map(
-  list(abq_age_2023, abq_age_2024),
+  age_list_dfs,
   \(x) map(
     list(
       log(x$Under.20.pct + 1),
@@ -254,9 +231,9 @@ The Elfving transformation from the `rcompanion` package can transform this into
 #| warning: false
 #| message: false
 
-c(abq_age_2023, abq_age_2024) %<-%
+age_list_dfs %<-%
   map(
-    list(abq_age_2023, abq_age_2024),
+    age_list_dfs,
     \(x) x %>%
       mutate(
         Under.20.pct.ELF = blom(Under.20.pct),
@@ -266,106 +243,82 @@ c(abq_age_2023, abq_age_2024) %<-%
 
 age_list_elf_str <- str_replace(age_list_str, "$", ".ELF")
 
-c(age_list_elf_2023, age_list_elf_2024) %<-%
-  map(
-    list(abq_age_2023, abq_age_2024),
-    \(x) list(
-      x$Under.20.pct.ELF,
-      x$Over.54.pct.ELF
-    )
-  )
+# c(age_list_elf_2023, age_list_elf_2024) %<-%
+#   map(
+#     list(abq_age_2023, abq_age_2024),
+#     \(x) list(
+#       x$Under.20.pct.ELF,
+#       x$Over.54.pct.ELF
+#     )
+#   )
 ```
 
 ```{r}
 #| warning: false
-c(p1, p2) %<-%
-  map(
-    age_list_elf_str,
-    \(x) plot_hist(abq_age_2023, x)
+age_list_elf_vars <- list(abq_age_2023$Under.20.pct.ELF, 
+                      abq_age_2023$Over.54.pct.ELF,
+                      abq_age_2024$Under.20.pct.ELF, 
+                      abq_age_2024$Over.54.pct.ELF)
+
+c(p1, p2, p3, p4) %<-%
+  map2(
+    rep(age_list_dfs, each = 2),
+    rep(age_list_elf_str, 2),
+    \(x, y) plot_hist(x, y)
   )
-c(p3, p4) %<-%
+c(p5, p6, p7, p8) %<-%
   map(
-    age_list_elf_2023,
+    age_list_elf_vars,
     \(x) ggqqplot(x)
   )
 
-(p1 + p3) /
-  (p2 + p4) + 
+(p1 + p5) /
+  (p2 + p6) + 
   plot_annotation(title = '2023')
-```
-
-```{r}
-#| warning: false
-c(p1, p2, p3) %<-%
-  map(
-    append(age_list_elf_str, age_list_str[2], after = 1),
-    \(x) plot_hist(abq_age_2024, x)
-  )
-c(p4, p5, p6) %<-%
-  map(
-    append(age_list_elf_2024, age_list_2024[2], after = 1),
-    \(x) ggqqplot(x)
-  )
-
-(p1 + p4) /
-  (p2 + p5) /
-  (p3 + p6) + 
+(p3 + p7) /
+  (p4 + p8) + 
   plot_annotation(title = '2024')
 ```
 
-
-
 ```{r}
-map(age_list_2023,
-    \(x) shapiro_test(x))
+map(age_list_elf_vars, shapiro_test)
 ```
-
-```{r}
-map(append(age_list_elf_2024, age_list_2024[2], after = 1),
-    \(x) shapiro_test(x))
-```
-
 
 This looks good. I should also check for equality of variance.
 
+
 ```{r}
-map(append(age_list_2023, age_list_elf_2023),
-    \(x) bartlett.test(x, abq_age_2023$district))
+map2(append(age_list_vars, age_list_elf_vars),
+     rep(rep(list(abq_age_2023$district, abq_age_2024$district), each = 2), each = 2),
+    \(x, y) bartlett.test(x, y))
 ```
 
 The untransformed data did not show homogeneity of variance, but the transformed data does. Now I'll to the analysis of variance.
 
-```{r}
-map(append(age_list_2024, age_list_elf_2024),
-    \(x) bartlett.test(x, abq_age_2024$district))
-```
-
-
 ## AOV
 
 ```{r}
-c(aov_under_20_pct_ELF_2023, aov_over_54_pct_ELF_2023) %<-%
-  map(
-    age_list_elf_str,
-    \(x) aov(as.formula(glue("{x} ~ district")),
-      data = abq_age_2023
+c(aov_under_20_pct_ELF_2023, aov_over_54_pct_ELF_2023,
+  aov_under_20_pct_ELF_2024, aov_over_54_pct_ELF_2024) %<-%
+  map2(
+    rep(age_list_dfs, each = 2),
+    rep(age_list_elf_str, 2),
+    \(x, y) aov(as.formula(glue("{y} ~ district")),
+      data = x
     )
   )
-map(list(aov_under_20_pct_ELF_2023, aov_over_54_pct_ELF_2023),
-    \(x) summary(x))
+
+age_aov_list <- list(
+  aov_under_20_pct_ELF_2023, aov_over_54_pct_ELF_2023,
+  aov_under_20_pct_ELF_2024, aov_over_54_pct_ELF_2024
+)
+
+map(age_aov_list, summary)
 ```
 
-```{r}
-c(aov_under_20_pct_ELF_2024, aov_over_54_pct_ELF_2024) %<-%
-  map(
-    age_list_elf_str,
-    \(x) aov(as.formula(glue("{x} ~ district")),
-      data = abq_age_2024
-    )
-  )
-map(list(aov_under_20_pct_ELF_2024, aov_over_54_pct_ELF_2024),
-    \(x) summary(x))
-```
+There is evidence of variance in all categories except the children in 2024. There seems to have been a significant change between the two years.
+
+Out of curiosity, I will run the Welch's test on the over 54 group in 2024. This variable was normally distributed, but did not show homogeneity of variance.
 
 ```{r}
 welchs_aov_over_54_pct <- oneway.test(
@@ -376,27 +329,19 @@ welchs_aov_over_54_pct <- oneway.test(
 welchs_aov_over_54_pct
 ```
 
+This supports the result of the `aov` on the transformed data.
 
 The results do show a statistical difference between the districts. Tukey's HSD can show us where.
 
 ```{r}
 map(
-  list(aov_under_20_pct_ELF_2023, aov_over_54_pct_ELF_2023),
+  list(aov_under_20_pct_ELF_2023, aov_over_54_pct_ELF_2023,
+       aov_over_54_pct_ELF_2024),
   \(x) TukeyHSD(x)[[1]] %>%
     as.data.frame() %>%
     filter(`p adj` <= .05)
 )
 ```
-
-```{r}
-map(
-  list(aov_under_20_pct_ELF_2024, aov_over_54_pct_ELF_2024),
-  \(x) TukeyHSD(x)[[1]] %>%
-    as.data.frame() %>%
-    filter(`p adj` <= .05)
-)
-```
-
 
 ```{r}
 abq_age_2024 %>%
@@ -404,6 +349,11 @@ abq_age_2024 %>%
   games_howell_test(Over.54.pct ~ district) %>%
   filter(p.adj <= .05)
 ```
+
+```{r}
+
+```
+
 
 
 Indeed, there is a statistically significant different between District 3 and most of the others. Out of curiosity, I will perform the test on the untransformed data.
@@ -432,8 +382,8 @@ plot_dist_ridge <- function(df, var) {
 #| warning: false
 pmap(
   list(
-    list(abq_age_2023, abq_age_2023, abq_age_2024, abq_age_2024),
-    as.list(rep(c("Under.20.pct", "Over.54.pct"), 2)),
+    rep(age_list_dfs, each = 2),
+    rep(age_list_str, 2),
     as.list(rep(c(
       "Population Percent under 20 years old",
       "Population Percent over 54 years old"
@@ -445,6 +395,7 @@ pmap(
     labs(title = y, subtitle = z)
 )
 ```
+
 
 ```{r}
 #| warning: false
