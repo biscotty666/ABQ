@@ -9,17 +9,17 @@ In the [last article](https://biscotty.net/posts/data-science/r-census/abq-demog
 
 # Setup
 
-I will begin by loading the required libraries, the functions created last time, and some of the datasets from the last session. I'll need to pivot the data, because I'd like the variables to be in columns.
+I will begin by loading the required libraries.
 
 ```{r}
 #| message: false
 options(paged.print = FALSE,
         tigris_use_cache = TRUE)
 libraries <- list(
-  "corrr", "ggspatial", "ggtext", "gt", "janitor", 
-  "patchwork", "sf", "spatialreg", "spdep", "tidycensus", 
-  "tidyverse", "zeallot", "DescTools", "GWmodel", "scales",
-  "ggpubr", "units", "rstatix", "rcompanion"
+  "corrr", "ggspatial", "ggtext", "patchwork", "sf",
+  "spatialreg", "spdep", "tidycensus", "tidyverse", 
+  "zeallot", "DescTools", "GWmodel", "scales", "glue",
+  "ggpubr", "units", "rstatix", "rcompanion", "collapse"
 )
 invisible(lapply(libraries, library, character.only = TRUE))
 ```
@@ -29,23 +29,21 @@ I'd like to check variance across a number of economic and demographic variables
 ```{r}
 year <- 2024
 crs <- 6528
-# caption <- str_glue("Source: census.gov, acs5, {year}")
+caption <- str_glue("Source: census.gov, acs5, {year}")
 ```
 
 ## Load Data
 
 ```{r}
-vars <- c(
+vars_census <- c(
   House.Value.Med = "B25077_001",
-  Owner.Occupied.Pct = "DP04_0046P",
   Renter.Occupied = "B25003_003",
   Vacant = "B25002_003",
-  Occupied = "B25002_002",
   Income.Med = "DP03_0062",
   Gini = "B19083_001",
   Rent.Med = "B25031_001",
   Foreign.Born.Pct = "DP02_0094P",
-  Hisp.Pct = "DP05_0076P",
+  Hisp.Pct = "DP05_0090P",
   In.Poverty = "B17001A_002",
   Age.Med = "B01002_001",
   College.Pct = "DP02_0068P",
@@ -54,11 +52,18 @@ vars <- c(
 ```
 
 ```{r}
+#| eval: false
+tidycensus::load_variables(year, "acs5/profile") %>% 
+  View()
+```
+ 
+
+```{r}
 bern_data <- get_acs(
   geography = "tract",
   state = "NM",
   county = "Bernalillo",
-  variables = vars,
+  variables = vars_census,
   output = "wide",
   year = year,
   geometry = TRUE,
@@ -73,20 +78,17 @@ bern_data <- get_acs(
 
 Bernalillo County contains some regions which are far from the urban area, these regions being largely unpopulated and distantly connected to the city. I want to look at the areas of the county proximate to the city, so I will define bounds which encompass this region.
 
-```{r}
-dist_box = c(xmin = 452000, xmax = 482000, 
-             ymin = 443500, ymax = 470000)
-bern_data <- bern_data %>% 
-  st_crop(dist_box)
-```
 
 
 One of the peculiarities of Albuquerque is the fact that there are numerous areas in the geographic area of Albuquerque which are not incorporated into the city. This includes "islands" in the middle of districts, as well as areas on the fringe of the city limits. In order to capture this data, I will create an "Unincorporated" district, and choose a geographic extent for the study area. In order to specify the "Unincororated" area, I will take the _difference_ between the full county and the areas attributed to one of the districts or Los Ranchos. After giving this data their label, I bind the identified region back to the `council_dists` data frame.
+
+### Council Districts
 
 ```{r}
 council_dists <-
   st_read("data/BC_CityCouncil/ABQ_CityCouncils.shp") %>%
   select(district = DISTRICTNU) %>%
+  arrange(district) %>% 
   mutate(district = paste("District", district))
 los_ranchos <-
   st_read("data/LosRanchos/LosRanchos.shp") %>%
@@ -104,9 +106,25 @@ difference <-
   rename(geometry = x) %>% 
   mutate(district = "Unincorporated")
 
-council_dists <- bind_rows(difference, council_dists) %>% 
+council_dists <- bind_rows(difference, council_dists)
+```
+
+```{r}
+dist_box = c(xmin = 452000, xmax = 479833, 
+             ymin = 443500, ymax = 467858)
+council_dists <- council_dists %>% 
   st_crop(dist_box)
 ```
+
+
+
+```{r}
+ggplot(council_dists, aes(color = district)) +
+  geom_sf() +
+  theme_void()
+```
+
+### County Census Data
 
 Let's take a look at the data before splitting it.
 
@@ -129,12 +147,10 @@ ggplot(bern_data) +
     type = "osm", alpha = 0.7,
     zoomin = -1, cachedir = "~/.cache/maps/"
   ) +
-  scale_fill_viridis_c(labels = label_dollar()) +
   theme_void() +
-  labs(fill = "Median Income") +
   lims(
-    x = c(465000, 475000),
-    y = c(449000, 455000)
+    x = c(435000, 475000),
+    y = c(444000, 455000)
   )
 ```
 
@@ -161,9 +177,7 @@ ggplot(bern_data) +
     type = "osm", alpha = 0.7,
     zoomin = -1, cachedir = "~/.cache/maps/"
   ) +
-  scale_fill_viridis_c(labels = label_dollar()) +
-  theme_void() +
-  labs(fill = "Median Income") 
+  theme_void()
 ```
 
 This tract contains federal land, with no useful data. I'll remove this as well.
@@ -184,6 +198,8 @@ This data seems worth preserving. I will interpolate these values based on the m
 
 Splitting the data involves intersecting the county data with the districts. Since some of the variables are extensive, representing counts, these values will need to be apportioned based on the percentage area represented by each subsection.
 
+## Create District Dataset
+
 ```{r}
 dist_data <- bern_data %>% 
   mutate(area = st_area(.)) %>% 
@@ -195,10 +211,14 @@ dist_data <- bern_data %>%
     Population.Density = Population / area_split,
     Renter.Occupied = round(Renter.Occupied * area_pct, 0),
     Vacant = round(Vacant * area_pct, 0),
-    Occupied = round(Occupied * area_pct, 0),
     In.Poverty = round(In.Poverty * area_pct, 0)
-  )
+    )
 ```
+
+```{r}
+summary(dist_data)
+```
+
 
 Now I can calculate the per-district averages for the two variables.
 
@@ -246,13 +266,15 @@ That looks good. I'll remove the percentage column, and can proceed with explori
 
 ```{r}
 dist_data <- dist_data %>% 
-  select(-area_pct)
+  select(-c(area_pct, Population, Population.Density))
 ```
 
 # Check Distributions
 
+## Visualize
+
 ```{r}
-var_names <- names(dist_data)[-c(1, 15:16)]
+var_names <- names(dist_data)[-c(1, 13:14)]
 ```
 
 ```{r}
@@ -277,140 +299,273 @@ plot_hist <- function(df, var) {
   geom_line(stat = "density", adjust = 2, color = "blue")
 }
 
-map(var_names, \(x) dist_data %>% plot_hist(x))
+hists <- map(var_names, \(x) dist_data %>% plot_hist(x))
+vars_list <- map(var_names, \(x) pull(dist_data, x))
+lines <- map(vars_list, ggqqplot)
+map(1:length(hists),
+     \(x) hists[[x]] + lines[[x]])
 ```
 
 ```{r}
-dist_data_abq_df <- st_drop_geometry(dist_data) %>% 
-  select(-GEOID) %>% 
+abq_data <- dist_data %>% 
   filter(!district %in% c("Unincorporated", "Los Ranchos"))
-dist_data_df <- st_drop_geometry(dist_data) %>% 
-  select(-GEOID)
 ```
+
+## Shapiro tests
+
+### Raw
 
 ```{r}
-res <- map(map(names(dist_data_abq_df)[1:13],
-               \(x) pull(dist_data_abq_df, x)),
-           shapiro_test)
-
-res %>% collapse::unlist2d() %>% 
-  mutate(variable = names(dist_data_abq_df)[1:13],
-         sig = if_else(p.value < .05, "Yes", "No")) %>% 
-  select(-1)
+map(
+  map(
+    var_names,
+    \(x) pull(abq_data, x)
+  ),
+  shapiro_test
+) %>%
+  collapse::unlist2d() %>%
+  mutate(
+    variable = var_names,
+    sig = if_else(p.value < .05, "Yes", "No")
+  ) %>%
+  select(-1) %>%
+  filter(sig == "No")
 ```
 
-Square-root transform
+### Square-root transform
 
 ```{r}
-data_sqrt <- map(names(dist_data_abq_df)[1:13], 
-        \(x) pull(dist_data_abq_df, x)) %>% 
-  lapply(sqrt)
+run_shapiro <- function(df, vars, fctn) {
+  data <- map(
+    vars,
+    \(x) pull(df, x)
+  ) %>%
+    lapply(fctn)
+  map(data, shapiro_test) %>%
+    collapse::unlist2d() %>%
+    mutate(
+      variable = vars,
+      sig = if_else(p.value < .05, "Yes", "No")
+    ) %>%
+    select(-1) %>%
+    filter(sig == "No")
+}
 
-map(data_sqrt, shapiro_test) %>% 
-  collapse::unlist2d() %>% 
-  mutate(variable = names(dist_data_abq_df)[1:13],
-         sig = if_else(p.value < .05, "Yes", "No")) %>% 
-  select(-1)
+run_shapiro(abq_data, var_names, sqrt)
 ```
 
-Cube root
+### Cube root
 
 ```{r}
 cube_root <- function(x) {
   sign(x) * abs(x)^(1/3)
 }
 
-data_cbrt <- map(names(dist_data_abq_df)[1:13], 
-        \(x) pull(dist_data_abq_df, x)) %>% 
-  lapply(cube_root)
-
-map(data_cbrt, shapiro_test) %>% 
-  collapse::unlist2d() %>% 
-  mutate(variable = names(dist_data_abq_df)[1:13],
-         sig = if_else(p.value < .05, "Yes", "No")) %>% 
-  select(-1)
+run_shapiro(abq_data, var_names, cube_root)
 ```
 
-Log transform (ihs)
+### Log transform (ihs)
 
 ```{r}
 ihs_transform <- function(x) {
   log(x + (x^2 + 1)^0.5)
 }
 
-data_ihs <- map(names(dist_data_abq_df)[1:13], 
-        \(x) pull(dist_data_abq_df, x)) %>% 
-  lapply(ihs_transform)
+run_shapiro(abq_data, var_names, ihs_transform)
+```
 
-map(data_ihs, shapiro_test) %>% 
-  collapse::unlist2d() %>% 
-  mutate(variable = names(dist_data_abq_df)[1:13],
-         sig = if_else(p.value < .05, "Yes", "No")) %>% 
-  select(-1)
+### Elf transform
+
+```{r}
+run_shapiro(abq_data, var_names, blom)
+```
+
+Remove non-standard variables.
+
+```{r}
+abq_data <- abq_data %>% 
+  select(-c("GEOID", "Vacant"))
+var_names <- var_names[-3]
 ```
 
 
 ```{r}
-data_elf <-
-  map(
-    names(vars)[1:13],
-    \(x) pull(dist_data_df, x)
-  ) %>%
-  lapply(blom)
-map(data_elf, shapiro_test) %>% 
-  collapse::unlist2d() %>% 
-  mutate(variable = names(vars)[1:13],
-         sig = if_else(p.value < .05, "Yes", "No")) %>% 
-  select(-1)
+abq_data_elf <- abq_data %>% 
+  mutate(across(all_of(var_names), ~ blom(.x)))
+```
+
+## Distribution Plots
+
+```{r}
+map(var_names, \(x) abq_data_elf %>% plot_dist(x))
 ```
 
 ```{r}
-dist_data_ss <- dist_data_df %>% 
-  select(House.Value.Med, Renter.Occupied, Vacant,
-         Income.Med, Gini, Rent.Med, Hisp.Pct,
-         In.Poverty, Age.Med)
-
-vars_ss <- vars[c(1,3:4, 6:8, 10:12)]
-
-vars
-data_elf <- 
-map(names(vars_ss), 
-        \(x) pull(dist_data_ss, x)) %>% 
-  lapply(blom) 
-
-map(data_elf, shapiro_test) %>% 
-  collapse::unlist2d() %>% 
-  mutate(variable = names(vars_ss),
-         sig = if_else(p.value < .05, "Yes", "No")) %>% 
-  select(-1)
-
-names(vars_ss)
-
-pull(dist_data_ss, names)
+hists <- map(var_names, \(x) abq_data_elf %>% plot_hist(x))
+var_vals <- map(var_names, \(x) pull(abq_data_elf, x))
+lines <- map(var_vals, ggqqplot)
+map(1:10,
+     \(x) hists[[x]] + lines[[x]])
 ```
+
+## Equality of variance (Bartlett's test)
 
 
 ```{r}
-dist_data_anova <- dist_data_df %>% 
-  mutate(income = ihs_transform(Income.Med),
-         in_poverty = cube_root(In.Poverty),
-         age_med = cube_root(Age.Med),
-         gini = Gini,
-         .keep = "none")
+# var_vals <- map(var_names, \(x) pull(abq_data_elf, x))
+btests <- map2(var_names, 
+     map(var_names, \(x) pull(abq_data_elf, x)),
+    \(x, y) list(x, bartlett.test(y ~ district, abq_data_elf)))
+tibble(
+  variable = unlist(map(1:length(btests), \(x) btests[[x]][[1]])),
+  statistic = unlist(map(1:length(btests), \(x) btests[[x]][[2]]$statistic)),
+  p_value = unlist(map(1:length(btests), \(x) btests[[x]][[2]]$p.value %>% round(., 3)))
+)
 ```
 
 ```{r}
+var_names_aov <- var_names[2:7]
+btests <- map2(var_names_aov, 
+     map(var_names_aov, \(x) pull(abq_data_elf, x)),
+    \(x, y) list(x, bartlett.test(y ~ district, abq_data_elf)))
+tibble(
+  variable = unlist(map(1:length(btests), \(x) btests[[x]][[1]])),
+  statistic = unlist(map(1:length(btests), \(x) btests[[x]][[2]]$statistic)),
+  p_value = unlist(map(1:length(btests), \(x) btests[[x]][[2]]$p.value %>% round(., 3)))
+)
+```
 
+# AOV
 
+## ANOVA
+
+```{r}
+aov_tests <- map(
+  var_names_aov,
+  \(x) list(x, aov(as.formula(glue::glue("{x} ~ district")),
+    data = abq_data_elf)
+  )
+)
+map2(1:length(aov_tests), var_names_aov, 
+     \(x, y) list(y, summary(aov_tests[[x]][[2]])))
+
+```
+
+## Welch's tests
+
+```{r}
+var_names_welch <- var_names[c(1, 8:10)]
+map(
+  var_names_welch,
+  \(x) list(x, oneway.test(as.formula(glue::glue("{x} ~ district")),
+    data = abq_data_elf, var.equal = F)
+  )
+)
 ```
 
 
 
+```{r}
+map(
+  var_names_welch,
+  \(x) list(x, welch_anova_test(as.formula(glue::glue("{x} ~ district")),
+    data = abq_data_elf %>% st_drop_geometry)
+  )
+)
+```
 
+## Ridge Plots
 
+```{r}
+#| message: false
+#| warning: false
+library(ggridges)
+plot_dist_ridge <- function(df, var) {
+  ggplot(df, aes(
+    x = .data[[var]], y = district,
+    fill = factor(stat(quantile))
+  )) +
+    stat_density_ridges(
+      geom = "density_ridges_gradient", calc_ecdf = TRUE,
+      quantiles = 4, quantile_lines = TRUE, alpha = 0.7,
+      jittered_points = TRUE, position = "points_sina"
+    ) +
+    scale_fill_viridis_d(name = "Quartiles") +
+    theme(axis.title.x = element_blank())
+}
+```
 
+```{r}
+#| warning: false
+map(var_names, 
+    \(x) abq_data_elf %>% 
+      plot_dist_ridge(x) +
+      labs(title = x))
+```
 
+## Tukey's
 
+```{r}
+results_tky <- map(
+  aov_tests,
+  \(x) TukeyHSD(x[[2]])$district %>% 
+    as.data.frame %>%
+  filter(`p adj` <= .05) %>% 
+  mutate(variable = x[[1]], .before = 1) %>% 
+    rownames_to_column("districts")) %>% 
+  unlist2d(idcols = FALSE) %>% 
+  separate(districts, c("District.1", "District.2"), sep = "-")
+
+dist_names <- unique(c(results_tky$District.1, results_tky$District.2)) %>% 
+  sort()
+var_names_tky <- unique(results_tky$variable)
+
+results_tky_dist <- map(
+  dist_names,
+  \(x) results_tky %>%
+    filter(District.1 == x | District.2 == x) %>%
+    mutate(
+      district = x,
+      compare = if_else(District.1 == x, District.2, District.1),
+      .before = variable
+    ) %>% 
+    select(-(1:2)) %>% 
+    arrange(district, compare)
+)
+```
+
+```{r}
+map(
+  dist_names,
+  \(x) results_tky %>%
+    filter(District.1 == x | District.2 == x) %>%
+    mutate(
+      district = x,
+      compare = if_else(District.1 == x, District.2, District.1),
+      .before = variable
+    ) %>% 
+    select(-(1:2)) %>% 
+    arrange(district, compare) %>% 
+    as_tibble()
+)
+```
+
+```{r}
+map(unique(results_tky$variable),
+    \(x) results_tky %>% 
+      filter(variable == x) %>% 
+  relocate(variable, .before = 1) %>% 
+  as_tibble())
+```
+
+## Linear Model
+
+```{r}
+map(var_names,
+    \(x) list(x, lm(as.formula(glue("{x} ~ district")),
+      data = abq_data_elf
+    ) %>% summary()))
+```
 
 
 
