@@ -1,11 +1,13 @@
 ---
 title: "District Variance"
-format: html
+format: gfm
 ---
 
 # Introduction
 
 In the [last article](https://biscotty.net/posts/data-science/r-census/abq-demographics) I compared age, race, and educational attainment between council districts in Albuquerque. In some cases, the variation was striking. In particular, the third district seemed quite different from the others in a number of ways. Now I would like to apply some statistical testing to see if this impression is backed up statistically.
+
+To make the comparison, I will use some economic and demographic information obtained from `census.gov` using the `tidycensus` package.
 
 # Setup
 
@@ -269,6 +271,9 @@ dist_data <- dist_data %>%
   select(-c(area_pct, Population, Population.Density))
 ```
 
+
+
+
 # Check Distributions
 
 ## Visualize
@@ -312,6 +317,8 @@ abq_data <- dist_data %>%
 ```
 
 ## Shapiro tests
+
+The shapiro test
 
 ### Raw
 
@@ -561,10 +568,40 @@ map(unique(results_tky$variable),
 ## Linear Model
 
 ```{r}
+
 map(var_names,
     \(x) list(x, lm(as.formula(glue("{x} ~ district")),
       data = abq_data_elf
     ) %>% summary()))
+```
+
+```{r}
+var_names_str <- glue_collapse(var_names, sep = " + ")
+lm(as.formula(glue("district ~ {var_names_str}")),
+   data = abq_data_elf %>% st_drop_geometry())
+abq_data_elf <- abq_data_elf %>% 
+  mutate(dist_num = parse_number(district))
+abq_data <- abq_data %>% 
+  mutate(dist_num = parse_number(district))
+form <- as.formula(glue("dist_num ~ {var_names_str}"))
+lm(form,
+   data = abq_data %>% st_drop_geometry()) %>% 
+  summary()
+summary(abq_data_elf)
+```
+
+```{r}
+data_sets <- c(
+  "dist_data", "bern_data", "abq_data", "abq_data_elf"
+)
+
+walk2(
+  map(data_sets, \(x) get(x)),
+  data_sets,
+  \(df, level) st_write(df, "data/district_variance.gpkg",
+    layer = level, append = F
+  )
+)
 ```
 
 
