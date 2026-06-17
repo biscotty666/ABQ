@@ -1,0 +1,131 @@
+---
+title: "Collapse Advanced Statistical Programming"
+format: gfm
+---
+
+[Source](https://fastverse.org/collapse/articles/collapse_intro.html)
+
+```{r}
+library(collapse)
+library(magrittr)
+```
+
+## Fast statistical functions
+
+`fsum`, `fprod`, `fmean`, `fmedian`, `fmode`, `fvar`, `fsd`, `fmin`, `fmax`, `fnth`, `ffirst`, `flast`, `fnobs`, `fndistinct`
+
+For column-wise means
+
+```{r}
+fmean(mtcars$mpg)
+(f1 <- fmean(mtcars))
+```
+
+```{r}
+(f2 <- fmean(mtcars, drop = F))
+```
+
+```{r}
+class(f1); class(f2)
+```
+
+```{r}
+m <- qM(mtcars)
+fmean(m)
+fmean(m, drop = F)
+```
+
+Weighted statistics
+
+```{r}
+weights <- abs(rnorm(fnrow(mtcars)))
+fmean(mtcars)
+fmean(mtcars, w = weights)
+```
+
+Frequency-weighted standard deviation
+
+```{r}
+fsd(mtcars, w = weights)
+```
+
+Grouped statistics
+
+```{r}
+fmean(mtcars, mtcars$cyl)
+```
+
+```{r}
+fmean(mtcars, fselect(mtcars, cyl, vs, am))
+```
+
+Getting column indices
+
+```{r}
+(ind <- fselect(mtcars, cyl, vs, am, return = "indices"))
+fmean(get_vars(mtcars, -ind), get_vars(mtcars, ind))
+```
+
+## Factors, Grouping Objects and Grouped Data Frames
+
+Passing factors or grouping objects to the `g` argument is faster than passing vectors. `na.exclude = FALSE` attaches a class `na.included`
+
+Create a factor. 
+```{r}
+f <- qF(mtcars$cyl, na.exclude = F)
+attributes(f)
+```
+
+Grouped standard deviation
+
+```{r}
+dat <- get_vars(mtcars, -ind)
+fsd(dat, f)
+```
+
+Without option na.exclude = FALSE, anyNA needs to be called on the factor (noticeable on larger data).
+
+```{r}
+f2 <- qF(mtcars$cyl)
+microbenchmark(fsd(dat, f), fsd(dat, f2))
+```
+
+Group (GRP) objects are prefereable over factors.
+
+Create a `GRP` object
+
+```{r}
+(g <- GRP(mtcars, ~ cyl + vs + am))
+str(g)
+```
+
+```{r}
+plot(g)
+```
+
+```{r}
+microbenchmark(fsd(dat, g), 
+               fsd(dat, get_vars(mtcars, ind)))
+```
+
+Or, create grouped data frame.
+
+```{r}
+gmtcars <- fgroup_by(mtcars, cyl, vs, am)
+fmedian(gmtcars)
+head(fgroup_vars(gmtcars))
+```
+
+```{r}
+fmedian(gmtcars, keep.group_vars = FALSE)
+```
+
+Now suppose we wanted to create a new dataset which contains the mean, sd, min and max of the variables mpg and disp grouped by cyl, vs and am:
+
+
+
+
+
+
+
+

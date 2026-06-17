@@ -15,13 +15,22 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        myPackages = {
+          patchedQuarto = pkgs.quarto.overrideAttrs (oldAttrs: {
+            postPatch = (oldAttrs.postPatch or "") + ''
+              substituteInPlace bin/quarto.js \
+                --replace-fail "syntax-highlighting" "highlight-style"
+            '';
+          });
+        };
       in
       {
         devShells.default = pkgs.mkShell {
           packages = builtins.attrValues {
+            inherit (myPackages) patchedQuarto;
             inherit (pkgs)
               R
-              quarto
+              # quarto
               chromium
               pandoc
               rstudio
@@ -34,6 +43,7 @@
               foreign
               GGally
               GWmodel
+              bestNormalize
               car
               classInt
               corrr
@@ -50,6 +60,7 @@
               gtExtras
               hereR
               janitor
+              kit
               mapboxapi
               nngeo
               osmdata

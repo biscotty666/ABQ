@@ -1,0 +1,470 @@
+---
+title: "Fast Data Manipulation"
+format: gfm
+---
+
+[Source](https://fastverse.org/collapse/articles/collapse_intro.html)
+
+```{r}
+library(collapse)
+library(magrittr)
+```
+
+
+## Selecting and Replacing Columng
+
+```{r}
+wlddev %>% 
+  fselect(country, year, PCGDP:ODA) %>% 
+  head(2)
+```
+
+```{r}
+wlddev %>% 
+  fselect(-country, -year, -(PCGDP:ODA)) %>% 
+  head(2)
+```
+
+```{r}
+wlddev %>% 
+  fselect(-c(country, year, PCGDP:ODA)) %>% 
+  head(2)
+```
+
+```{r}
+library(microbenchmark)
+microbenchmark(fselect = collapse::fselect(wlddev, country, year, PCGDP:ODA),
+               select = dplyr::select(wlddev, country, year, PCGDP:ODA))
+```
+
+`fselect` can also replace
+
+```{r}
+fselect(wlddev, PCGDP:POP) <- lapply(fselect(wlddev, PCGDP:POP), log)
+head(wlddev, 2)
+```
+
+Efficient deletion
+
+```{r}
+fselect(wlddev, country, year, PCGDP:POP) <- NULL
+head(wlddev, 2)
+```
+
+```{r}
+rm(wlddev)
+```
+
+Other information returned by `fselect`.
+
+```{r}
+wlddev %>% 
+  fselect(PCGDP:POP, return = "names")
+wlddev %>% 
+  fselect(PCGDP:POP, return = "indices")
+wlddev %>% 
+  fselect(PCGDP:POP, return = "named_indices")
+wlddev %>% 
+  fselect(PCGDP:POP, return = "logical")
+wlddev %>% 
+  fselect(PCGDP:POP, return = "named_logical")
+```
+
+There are no special methods for grouped tibbles.
+
+Select variables with `get_vars`
+
+```{r}
+wlddev %>% 
+  get_vars(9:13) %>% 
+  head(1)
+wlddev %>% 
+  get_vars( c("PCGDP","LIFEEX","GINI","ODA","POP")) %>% 
+  head(1)
+wlddev %>% 
+  get_vars("[[:upper:]]", regex = T) %>% 
+  head(1)
+wlddev %>% 
+  get_vars("PC|LI|GI|OD|PO", regex = T) %>% 
+  head(1)
+wlddev %>% 
+  get_vars(c("PC","LI","GI","OD","PO"), regex = TRUE) %>% 
+  head(1)
+wlddev %>% 
+  get_vars(is.numeric) %>% 
+  head(1)
+wlddev %>% 
+  get_vars(is.numeric, return = "names") %>% 
+  head(1)
+```
+
+Can also replace with `get_vars`
+
+```{r}
+get_vars(wlddev, 9:13) <- lapply(
+  get_vars(wlddev, 9:13), log
+)
+get_vars(wlddev, 9:13) <- NULL
+head(wlddev)
+rm(wlddev)
+```
+
+collapse offers a set of functions to efficiently select and replace data by data type: `num_vars`, `cat_vars` (for categorical = non-numeric columns), `char_vars`, `fact_vars`, `logi_vars` and `date_vars` (for date and date-time columns).
+
+
+```{r}
+num_vars(wlddev) %>% head(2)
+cat_vars(wlddev) %>% head(2)
+fact_vars(wlddev) %>% head(2)
+```
+
+Replacing
+
+```{r}
+fact_vars(wlddev) <- fact_vars(wlddev)
+```
+
+## Subsetting
+
+`fsubset` allows multiple comma-separated select arguments after the subset argument, and it also preserves all attributes of subsetted columns:
+
+
+```{r}
+fsubset(GGDC10S, Variable == "VA" & Year > 1990,
+        Country, Year, AGR:GOV) %>% head(2)
+```
+
+```{r}
+fsubset(GGDC10S, Variable == "VA" & Year > 1990,
+        -(Regioncode:Variable), -(OTH:SUM)) %>% head(2)
+```
+
+```{r}
+ss(GGDC10S, 1:2, 6:16)
+ss(GGDC10S, -(1:2), c("AGR","MIN")) %>% head(2)
+```
+
+
+```{r}
+microbenchmark(
+  base = subset(GGDC10S, Variable == "VA" & Year > 1990, AGR:SUM),
+  collapse = fsubset(GGDC10S, Variable == "VA" & Year > 1990, AGR:SUM)
+)
+microbenchmark(GGDC10S[1:10, 1:10], ss(GGDC10S, 1:10, 1:10))
+```
+
+## Reordering Rows and Columns
+
+Replaces `arrange`. Negative variable names indicate descending sort.
+
+```{r}
+roworder(GGDC10S, -Variable, Country) %>% 
+  ss(1:2, 1:8)
+```
+
+
+```{r}
+microbenchmark(collapse = collapse::roworder(GGDC10S, -Variable, Country),
+               dplyr = dplyr::arrange(GGDC10S, desc(Variable), Country))
+```
+
+The function roworderv is a standard evaluation analogue to roworder:
+
+```{r}
+roworderv(GGDC10S, c("Variable", "Country"), 
+          decreasing = c(TRUE, FALSE)) %>% 
+  ss(1:2, 1:8)
+```
+
+Move or exchange rows with `roworderv`
+
+```{r}
+GGDC10S %>% roworderv(
+  neworder = which(GGDC10S$Country == "GHA")
+) %>% 
+  ss(1:2, 1:8)
+GGDC10S %>% roworderv(
+  neworder = which(GGDC10S$Country == "BWA"), pos = "end"
+) %>% 
+  ss(1:2, 1:8)
+```
+
+`pos = "exchange"` arranges selected rows in the order they are passed, without affecting other rows
+
+```{r}
+GGDC10S %>% roworderv(
+  neworder = with(GGDC10S, c(which(Country == "GHA"),
+                             which(Country == "BWA"))),
+  pos = "exchange"
+) %>% 
+  ss(1:2, 1:8)
+```
+
+## Transforming and Computing New Columns
+
+`ftransform` always returns the entire data frame.
+
+```{r}
+GGDC10S %>% 
+  ftransform(AGR_perc = AGR / SUM * 100,
+             Year = as.integer(Year),
+             AGR = NULL) %>% 
+  tail(2)
+```
+
+```{r}
+GGDC10S %>% 
+  ftransform(MIN_mean = fmean(MIN),
+             Intercept = 1) %>% 
+  tail(2)
+```
+
+The modification `ftransformv` exists to transform specific columns using a function:
+
+
+```{r}
+GGDC10S %>% 
+  ftransformv(6:16, log) %>% 
+  tail(2)
+GGDC10S %>% 
+  ftransformv(6:16, `*`, 100 / SUM) %>% 
+  tail(2)
+GGDC10S %>% 
+  ftransformv(is.numeric, log) %>% 
+  tail(2)
+```
+
+```{r}
+GGDC10S %>%
+  ftransform(num_vars(.) %>%
+    lapply(log) %>%
+    replace_Inf()) %>%
+  tail(2)
+```
+
+The function settransform(v) can be used to change the input data frame by reference: 
+
+
+```{r}
+settransform(GGDC10S, FIRE_MAN = FIRE / MAN,
+                      Regioncode = NULL, Region = NULL)
+tail(GGDC10S, 2)
+```
+
+```{r}
+rm(GGDC10S)
+settransformv(GGDC10S, 6:16, `*`, 100 / SUM)
+tail(GGDC10S)
+```
+
+`fcompute` can be used to compute new columns, returning the computed columns in a new data frame.
+
+```{r}
+fcompute(GGDC10S, AGR_perc = AGR / SUM * 100, FIRE_MAN = FIRE / MAN) %>% 
+  tail(2)
+```
+
+## Adding and Binding Columns
+
+`add_vars`
+
+```{r}
+rm(wlddev)
+add_vars(wlddev) <- 
+  get_vars(wlddev, 9:13) %>% 
+  lapply(log10) %>% 
+  add_stub("log10.")
+head(wlddev, 2)
+```
+
+Replace at other positions
+
+```{r}
+rm(wlddev)
+add_vars(wlddev, "front") <- 
+  get_vars(wlddev, 9:13) %>% 
+  lapply(log10) %>% 
+  add_stub("log10.")
+head(wlddev, 2)
+```
+
+```{r}
+rm(wlddev)
+
+add_vars(wlddev, c(10L, 12L, 14L, 16L, 18L)) <- 
+  get_vars(wlddev, 9:13) %>%
+  lapply(log10) %>%
+  add_stub("log10.")
+head(wlddev, 2)
+```
+
+Using `add_vars` without replacement.
+
+```{r}
+rm(wlddev)
+add_vars(
+  wlddev, 
+  get_vars(wlddev, 9:13) %>% lapply(log) %>% add_stub("log."),
+  get_vars(wlddev, 9:13) %>% lapply(log10) %>% add_stub("log10.")
+) %>% head(2)
+```
+
+```{r}
+add_vars(wlddev,
+  get_vars(wlddev, 9:13) %>% lapply(log) %>% add_stub("log."),
+  get_vars(wlddev, 9:13) %>% lapply(log10) %>% add_stub("log10."),
+  pos = c(10L, 13L, 16L, 19L, 22L, 11L, 14L, 17L, 20L, 23L)
+) %>% head(2)
+```
+
+
+```{r}
+identical(cbind(wlddev, wlddev), add_vars(wlddev, wlddev))
+
+microbenchmark(cbind(wlddev, wlddev), add_vars(wlddev, wlddev))
+```
+
+## Renaming Columns
+
+```{r}
+GGDC10S %>% 
+  frename(AGR = Agriculture, MIN = Mining) %>% 
+  head(2)
+```
+
+```{r}
+frename(GGDC10S, tolower) %>% head(2)
+
+frename(GGDC10S, tolower, cols = .c(AGR, MIN)) %>% head(2)
+```
+
+Rename by reference
+
+```{r}
+setrename(GGDC10S, AGR = Agriculture, MIN = Mining)
+head(GGDC10S, 2)
+rm(GGDC10S)
+```
+
+## Shortcuts
+
+Only recommended for personal scripts
+
+- `fselect` -> `slt`
+- `fsubset` -> `sbt`
+- `ftransform(v)` -> `tfm(v)`
+- `settransform(v)` -> `settfm(v)`
+- `get_vars -> gv`
+- `num_vars -> nv`
+- `add_vars` -> `av`. 
+
+## Missing Values/Rows
+
+```{r}
+microbenchmark(
+  na_omit(wlddev, na.attr = TRUE), 
+  na.omit(wlddev))
+```
+
+Act on certain columns only
+
+```{r}
+na_omit(wlddev, cols = .c(PCGDP, LIFEEX)) %>% 
+  head(2)
+na_omit(wlddev, cols = is.numeric) %>% head(2)
+```
+
+
+For atomic vectors the function `na_rm` also exists which is 2x faster than `x[!is.na(x)]`. Both `na_omit` and `na_rm` return their argument if no missing cases were found.
+
+The existence of missing cases can be checked using `missing_cases`, which is also considerably faster than `complete.cases` for data frames.
+
+There is also a function `na_insert` to randomly insert missing values into vectors, matrices and data frames. The default is `na_insert(X, prop = 0.1)` so that 10% of values are randomly set to missing.
+
+Finally, a function `allNA` provides the much needed opposite of anyNA for atomic vectors.
+
+## Unique Values / Rows
+
+```{r}
+funique(GGDC10S$Variable, sort = T)
+```
+
+If all values/rows are unique, the original data is returned
+
+```{r}
+identical(funique(GGDC10S), GGDC10S)
+```
+
+Remove duplicate rows
+
+```{r}
+funique(GGDC10S, cols = .c(Country, Variable)) %>% 
+  ss(1:2, 1:8)
+```
+
+```{r}
+funique(GGDC10S, cols = c("Country", "Variable")) %>% 
+  ss(1:2, 1:8)
+```
+
+```{r}
+funique(GGDC10S, cols = .c(Country, Variable), sort = T) %>% 
+  ss(1:2, 1:8)
+```
+
+## Recoding and Replacing
+
+- `recode_num`
+- `recode_char`
+- `replace_NA`
+- `replace_Inf`
+- `replace_outliers`
+
+```{r}
+microbenchmark(replace_NA(GGDC10S, 0))
+```
+
+```{r}
+add_vars(GGDC10S, 6:16*2-5) <- 
+  fselect(GGDC10S, AGR:SUM) %>% 
+  lapply(log) %>% 
+  replace_Inf() %>% 
+  add_stub("log.")
+head(GGDC10S, 2)
+rm(GGDC10S)
+```
+
+```{r}
+recode_char(month.name,
+            ber = "C", "^J" = "A", default = "B",
+            regex = TRUE)
+```
+
+`replace_outliers` replaces values falling outside a 1- or 2-sided numeric threshold or outside a certain number of column- standard deviations with a value (default is NA).
+
+Replace all values below 2 and above 100 with NA
+
+```{r}
+replace_outliers(mtcars, c(2, 100)) %>% 
+  head(3)
+```
+
+Replace only values smaller than 2
+
+```{r}
+replace_outliers(mtcars, 2, single.limit = "min") %>% 
+  head(3)
+```
+
+Replace only values larger than 100
+
+```{r}
+replace_outliers(mtcars, 100, single.limit = "max") %>% 
+  head(3)
+```
+
+Replace values above or below 3 column-standard-deviations with NA
+
+```{r}
+replace_outliers(mtcars, 3) %>% tail(3)
+```

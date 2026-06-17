@@ -1,0 +1,178 @@
+---
+title: "Collapse for tidyverse users"
+format: gfm
+---
+
+
+[Source](https://fastverse.org/collapse/articles/collapse_for_tidyverse_users.html)
+
+```{r}
+library(collapse)
+library(magrittr)
+library(dplyr)
+options(paged.print = F)
+```
+
+Substitute `collapse` functions for `dplyr` ones without the prefix.
+
+```{r}
+#| eval: false
+set_collapse(mask = "manip")
+```
+
+```{r}
+mtcars %>% 
+  subset(mpg > 11) %>% 
+  group_by(cyl, vs, am) %>% 
+  summarise(across(c(mpg, carb, hp), mean),
+            qsec_wt = weighted.mean(qsec, wt))
+```
+
+```{r}
+mtcars %>% 
+  fsubset(mpg > 11) %>% 
+  fgroup_by(cyl, vs, am) %>% 
+  fsummarise(
+    across(c(mpg, carb, hp), fmean),
+    qsec_wt = fmean(qsec, wt)
+  ) %>% 
+  as_tibble()
+```
+
+# Using fast statistical functions
+
+```{r}
+fmean(mtcars$mpg)
+```
+
+```{r}
+fmean(mtcars)
+```
+
+Weighted mean
+
+```{r}
+fmean(mtcars$mpg, w = mtcars$wt)
+```
+
+Group mean
+
+```{r}
+fmean(mtcars$mpg, g = mtcars$cyl, w = mtcars$wt)
+```
+
+```{r}
+mtcars %>% 
+  fsubset(mpg > 11) %>% 
+  fgroup_by(cyl, vs, am) %>% 
+  fselect(mpg, carb, hp) %>% 
+  fmean()
+```
+
+# Code efficiency
+
+Optimized version of above
+
+```{r}
+mtcars %>% 
+  fsubset(mpg > 11, cyl, vs, am, mpg, carb, hp, qsec, wt) %>% 
+  fgroup_by(cyl, vs, am) %>% 
+  fsummarise(across(c(mpg, carb, hp), fmean),
+             qsec_wt = fmean(qsec, wt))
+```
+
+Without weighted mean
+
+```{r}
+mtcars %>% 
+  fsubset(mpg > 11, cyl, vs, am, mpg, carb, hp) %>% 
+  fgroup_by(cyl, vs, am) %>% 
+  fmean()
+```
+
+Finally, we could set the following options to toggle unsorted grouping, no missing value skipping, and multithreading across the three columns for more efficient execution.
+
+```{r}
+mtcars %>% 
+  fsubset(mpg > 11, cyl, vs, am, mpg, carb, hp) %>% 
+  fgroup_by(cyl, vs, am, sort = F) %>% 
+  fmean(nthreads = 3, na.rm = F)
+```
+
+# Internal Grouping
+
+Avoid `fgroup_by()` where possiblem especially with `mutate()`.
+
+```{r}
+mtcars %>% 
+  mutate(
+    mpg_median = fmedian(mpg, list(cyl, vs, am), 
+                         TRA = "fill")
+  ) %>% 
+  head(3)
+```
+
+`fbetween` for averaging, `fwithin` for centering.
+
+```{r}
+mtcars %>% 
+  mutate(
+    mpg_median = fbetween(mpg, list(cyl, vs, am)) 
+  ) %>% 
+  head(3)
+```
+
+Of course, if we want to apply different functions using the same grouping, fgroup_by() is sensible, but for mutate operations it also has the argument return.groups = FALSE, which avoids materializing the unique grouping columns, saving some memory.
+
+```{r}
+mtcars %>% 
+  fgroup_by(cyl, vs, am, return.groups = F) %>% 
+  fmutate(
+    mpg_median = fmedian(mpg),
+    mpg_mean = fmean(mpg),
+    mpg_mean_same = fbetween(mpg),
+    mpg_demean = fwithin(mpg),
+    mpg_demean_same = fmean(mpg, TRA = "-"),
+    mpg_scale = fscale(mpg),
+    .keep = "used"
+  ) %>% 
+  fungroup() %>% 
+  head(3)
+```
+
+Using `TRA = "/"` turns the column vectors into proportions.
+
+```{r}
+exports <- expand.grid(c = paste0("c", 1:8), s = paste0("s", 1:8), y = 1:15) %>% 
+  fmutate(v = round(abs(rnorm(length(c), mean = 5)), 2)) %>% 
+  fsubset(-sample.int(length(v), 360))
+head(exports); nrow(exports)
+```
+
+It is very easy then to compute Balassa’s (1965) Revealed Comparative Advantage (RCA) index, which is the share of a sector in country exports divided by the share of the sector in world exports. An index above 1 indicates that a RCA of country c in sector s.
+
+`settfm()` modifies exports and assigns it back to the global environment
+
+```{r}
+settfm(exports,
+       RCA = fsum(v, list(c, y), TRA = "/") %/=% 
+         fsum(fsum(v, y, TRA = "/"), list(s, y), TRA = "fill", set = TRUE))
+```
+
+```{r}
+pivot(exports,
+      ids = "c", values = "RCA", names = "s",
+      how = "wider", FUN = "mean", sort = TRUE)
+```
+
+We may also wish to investigate the growth rate of RCA. This can be done using fgrowth(). Since the panel is irregular, i.e., not every sector is observed in every year, it is critical to also supply the time variable.
+
+```{r}
+exports %>% 
+  fmutate(
+    RCA_growth = fgrowth(RCA, g = list(c, s), t = y)
+  ) %>% 
+  pivot(ids = "c", values = "RCA_growth", names = "s",
+        how = "wider", FUN = fmedian, sort = TRUE)
+```
+

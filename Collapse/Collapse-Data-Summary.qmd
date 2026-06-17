@@ -1,0 +1,188 @@
+---
+title: "Collapse Data and summary tools"
+format: gfm
+---
+
+[Source](https://fastverse.org/collapse/articles/collapse_intro.html)
+
+# World Bank Development Data
+
+```{r}
+library(collapse)
+library(magrittr)
+head(wlddev)
+```
+
+Name attributes, set with `vlabels()`.
+
+```{r}
+namlab(wlddev, class = TRUE)
+```
+
+```{r}
+descr(wlddev)
+```
+
+Convert output to data frame
+
+```{r}
+descr(wlddev) %>% 
+  as.data.frame() %>% 
+  head()
+```
+
+Check which variables are time-varying.
+
+```{r}
+varying(wlddev, wlddev$iso3c)
+```
+
+Check variation within each country
+
+```{r}
+varying(wlddev, wlddev$iso3c, any_group = F) %>% 
+  head()
+```
+
+In general data is varying if it has two or more distinct non-missing values. We could also take a closer look at observation counts and distinct values using:
+
+```{r}
+fnobs(wlddev, wlddev$iso3c) %>% head()
+fndistinct(wlddev, wlddev$iso3c) %>% head()
+```
+
+Summarize. `higher = TRUE` provides skewness.
+
+```{r}
+qsu(wlddev, cols = 9:12, higher = TRUE)
+```
+
+Same by region
+
+```{r}
+qsu(wlddev, by = ~region, cols = 9:12, vlabels = TRUE, higher = TRUE)
+```
+
+```{r}
+qsu(wlddev, pid = ~ iso3c, cols = c(1,4,9:12), vlabels = TRUE, higher = TRUE)
+```
+
+The above output reports 3 sets of summary statistics for each variable: Statistics computed on the Overall (raw) data, and on the Between-country (i.e. country averaged) and Within-country (i.e. country-demeaned) data1. This is a powerful way to summarize panel data because aggregating the data by country gives us a cross-section of countries with no variation over time, whereas subtracting country specific means from the data eliminates all cross-sectional variation. 
+
+The N/T columns shows that for `PCGDP` we have 9470 total observations, that we observe GDP data for 206 countries and that we have on average 45.97 observations (time-periods) per country. In contrast the GINI Index is only available for 167 countries with 10.4 observations on average. The Overall and Within mean of the data are identical by definition, and the Between mean would also be the same in a balanced panel with no missing observations. In practice we have unequal amounts of observations for different countries, thus countries have different weights in the Overall mean and the difference between _Overall_ and _Between_-country mean reflects this discrepancy. The most interesting statistic in this summary arguably is the standard deviation, and in particular the comparison of the _Between_-SD reflecting the variation between countries and the _Within_-SD reflecting average variation over time. This comparison shows that `PCGDP`, `LIFEEX` and `GINI` vary more between countries, but ODA received varies more within countries over time. The 0 _Between_-SD for the year variable and the fact that the _Overall_ and _Within_-SD are equal shows that year is individual invariant. Thus `qsu` also provides the same information as `varying`, but with additional details on the relative magnitudes of cross-sectional and time series variation. It is also a common pattern that the _kurtosis_ increases in within-transformed data, while the _skewness_ decreases in most cases.
+
+Perform the same across regions
+
+```{r}
+(m <- qsu(wlddev, by = ~ region, pid = ~ iso3c, cols = 9:12, 
+    vlabels = TRUE, higher = TRUE))
+```
+
+```{r}
+class(m); str(m)
+```
+
+Notice that the output here is a 4D array of summary statistics, which we could also subset ([) or permute (aperm) to view these statistics in any convenient way. 
+
+Output as nested list.
+
+```{r}
+l <- qsu(wlddev, by = ~ region, pid = ~ iso3c, cols = 9:12,
+          vlabels = T, higher = T, array = F)
+str(l, give.attr = F)
+```
+
+Convert to data frame
+
+```{r}
+unlist2d(l, idcols = c("Variable", "Trans"), row.names = "Region") %>% 
+  head()
+```
+
+Weighted pairwise correlations
+
+```{r}
+pwcor(wlddev[9:12], N = TRUE, P = TRUE)
+```
+
+Pairwise correlations computed on averaged and within-transformed data.
+
+```{r}
+pwcor(fmean(wlddev[9:12], wlddev$iso3c), N = TRUE, P = TRUE) %>% 
+  print(show = "lower.tri")
+```
+
+```{r}
+pwcor(fwithin(wlddev[9:12], wlddev$iso3c), P = TRUE) %>% 
+  print(show = "lower.tri")
+```
+
+```{r}
+pwnobs(wlddev)
+```
+
+Note that both pwcor/pwcov and pwnobs are faster on matrices.
+
+# GGDC 10-sector database
+
+The Groningen Growth and Development Centre 10-Sector Database provides long-run data on sectoral productivity performance in Africa, Asia, and Latin America. Variables covered in the data set are annual series of value added (VA, in local currency), and persons employed (EMP) for 10 broad sectors.
+
+```{r}
+head(GGDC10S); class(GGDC10S); namlab(GGDC10S, class = T)
+```
+
+```{r}
+unique(GGDC10S$Variable)
+```
+
+Problems: `VA` is in local currency, and `VA` and `EMP` share the same column. To address the first problem, convert to percentages based on the sector sum in column 16. The second problem is solved using group statistics.
+
+```{r}
+pGGDC10S <- ftransformv(GGDC10S, 6:15, `*`, 100 / SUM)
+su <- qsu(pGGDC10S, by = ~ Variable, pid = ~ Variable + Country,
+          cols = 6:16, higher = T)
+str(su)
+```
+
+Permute the array to a more readable format
+
+```{r}
+aperm(su, c(4L, 2L, 3L, 1L))
+```
+
+The statistics show that the dataset is very consistent: Employment data cover 42 countries and 53 time-periods in almost all sectors. Agriculture is the largest sector in terms of employment, amounting to a 35% share of employment across countries and time, with a standard deviation (SD) of around 27%. The between-country SD in agricultural employment share is 24% and the within SD is 12%, indicating that processes of structural change are very gradual and most of the variation in structure is between countries. The next largest sectors after agriculture are manufacturing, wholesale and retail trade and government, each claiming an approx. 15% share of the economy. In these sectors the between-country SD is also about twice as large as the within-country SD.
+
+In terms of value added, the data covers 43 countries in 50 time-periods. Agriculture, manufacturing, wholesale and retail trade and government are also the largest sectors in terms of VA, but with a diminished agricultural share (around 17%) and a greater share for manufacturing (around 20%). The variation between countries is again greater than the variation within countries, but it seems that at least in terms of agricultural VA share there is also a considerable within-country SD of 8%. This is also true for the finance and real estate sector with a within SD of 9%, suggesting (using a bit of common sense) that a diminishing VA share in agriculture and increased VA share in finance and real estate was a pattern characterizing most of the countries in this sample.
+
+# Plot
+
+```{r collapse-data-summary-1}
+library(ggplot2)
+plotGGDC <- function(ctry) {
+  fsubset(GGDC10S, Country == ctry, Variable, Year, AGR:SUM) %>% 
+    ftransform(fselect(., AGR:OTH) %>% 
+                 lapply(`*`, 1 / SUM) %>% 
+                 replace_outliers(0, NA, "min")) %>% 
+    ftransform(Variable = recode_char(Variable,
+                                      VA = "Value Added Share",
+                                      EMP = "Employment Share"),
+               SUM = NULL) %>% 
+    qDT() %>% 
+    data.table::melt(1:2, variable.name = "Sector", na.rm = T) %>% 
+    ggplot(aes(x = Year, y = value, fill = Sector)) +
+    geom_area(position = "fill", alpha = 0.9) +
+    labs(x = NULL, y = NULL) +
+    theme_linedraw(base_size = 14L) +
+    facet_wrap(~ Variable) +
+    scale_fill_manual(values = sub("#00FF66", "#00CC66", rainbow(10L))) +
+    scale_x_continuous(breaks = scales::pretty_breaks(n = 7L), expand = c(0, 0)) +
+    scale_y_continuous(scales::pretty_breaks(n = 10L), expand = c(0,0),
+                       labels = scales::percent) +
+    theme(axis.text.x = element_text(angle = 315, hjust = 0, margin = ggplot2::margin(t = 0)),
+          strip.background = element_rect(colour = "grey20", fill = "grey20"),
+          strip.text = element_text(face = "bold"))    
+}
+
+plotGGDC("BWA")
+```
+

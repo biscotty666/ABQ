@@ -1,0 +1,100 @@
+---
+title: "Collapse Data Object Conversions"
+format: gfm
+---
+
+[Source](https://fastverse.org/collapse/articles/collapse_intro.html)
+
+```{r}
+library(collapse)
+library(magrittr)
+library(microbenchmark)
+```
+
+
+`collapse` provides a set of functions to speed these conversions
+
+- `qDF` - convert to data.frame
+- `qDT` - convert to data.table
+- `qTBL` - convert to tibble
+- `qM` - converts vectors, higher-dim arrays, data frames, and suitable lists to matrix
+- `qF` - convert vector to factor
+- `mrtl` - row-wise convert a matrix into list, data.frame or data.table
+- `mctl` - column-wise convert a matrix into list, data.frame or data.table
+
+```{r}
+str(EuStockMarkets)
+```
+
+```{r}
+microbenchmark(
+  qDT(wlddev),
+  qDT(EuStockMarkets),
+  data.table::as.data.table(wlddev),
+  as.data.frame(EuStockMarkets)
+)
+```
+
+By default these functions drop all unnecessary attributes from matrices or lists / data frames in the conversion, but this can be changed using the keep.attr = TRUE argument.
+
+`row.names.col` saves names/row names in a column.
+
+```{r}
+head(qDT(mtcars, "car"))
+```
+
+```{r}
+(N_distinct <- fndistinct(GGDC10S))
+```
+
+Convert to data frame, preserving names
+
+```{r}
+head(qDF(N_distinct, "variable"))
+```
+
+This converts the matrix to a list of 1860 row-vectors of length 4.
+
+```{r}
+microbenchmark(mrtl(EuStockMarkets))
+```
+
+```{r}
+mrtl(EuStockMarkets) %>% head()
+```
+
+```{r}
+microbenchmark(rowSums(qM(mtcars)), 
+               rowSums(mtcars),
+               kit::psum(mtcars))
+```
+
+Factor From Character
+
+```{r}
+str(wlddev$country)
+fndistinct(wlddev$country)
+microbenchmark(
+  qF(wlddev$country),
+  as.factor(wlddev$country)
+)
+```
+
+Factor from numeric
+
+```{r}
+fndistinct(wlddev$PCGDP)
+microbenchmark(
+  qF(wlddev$PCGDP),
+  as.factor(wlddev$PCGDP)
+)
+```
+
+
+
+
+
+
+
+
+
