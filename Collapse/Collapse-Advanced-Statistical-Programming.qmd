@@ -3,14 +3,16 @@ title: "Collapse Advanced Statistical Programming"
 format: gfm
 ---
 
+
 [Source](https://fastverse.org/collapse/articles/collapse_intro.html)
 
 ```{r}
 library(collapse)
 library(magrittr)
+library(microbenchmark)
 ```
 
-## Fast statistical functions
+# Fast statistical functions
 
 `fsum`, `fprod`, `fmean`, `fmedian`, `fmode`, `fvar`, `fsd`, `fmin`, `fmax`, `fnth`, `ffirst`, `flast`, `fnobs`, `fndistinct`
 
@@ -66,7 +68,7 @@ Getting column indices
 fmean(get_vars(mtcars, -ind), get_vars(mtcars, ind))
 ```
 
-## Factors, Grouping Objects and Grouped Data Frames
+# Factors, Grouping Objects and Grouped Data Frames
 
 Passing factors or grouping objects to the `g` argument is faster than passing vectors. `na.exclude = FALSE` attaches a class `na.included`
 
@@ -99,7 +101,7 @@ Create a `GRP` object
 str(g)
 ```
 
-```{r}
+```{r collapse-adv-stat-prog-1}
 plot(g)
 ```
 
@@ -122,10 +124,128 @@ fmedian(gmtcars, keep.group_vars = FALSE)
 
 Now suppose we wanted to create a new dataset which contains the mean, sd, min and max of the variables mpg and disp grouped by cyl, vs and am:
 
+Standard evaluation
+```{r}
+dat <- get_vars(mtcars, c("mpg", "disp"))
+add_vars(g[["groups"]],
+         add_stub(fmean(dat, g, use.g.names = F), "mean_"),
+         add_stub(fsd(dat, g, use.g.names = F), "sd_"),
+         add_stub(fmin(dat, g, use.g.names = F), "min_"),
+         add_stub(fmax(dat, g, use.g.names = F), "max_"))
+```
+
+Non-standard evaluation
+
+```{r}
+fgroup_by(mtcars, cyl, vs, am) %>% 
+  fselect(mpg, disp) %>% {
+    add_vars(fgroup_vars(., "unique"),
+             fmean(., keep.group_vars = F) %>% add_stub("mean_"),
+             fsd(., keep.group_vars = F) %>% add_stub("sd_"),
+             fmin(., keep.group_vars = F) %>% add_stub("min_"),
+             fmax(., keep.group_vars = F) %>% add_stub("max_"))
+  }
+```
+
+# Grouped and Weighted Computations
+
+Using a weight vector
+
+```{r}
+add_vars(g[["groups"]],
+         add_stub(fmean(dat, g, weights, use.g.names = F), "w_mean_"),
+         add_stub(fsd(dat, g, weights, use.g.names = F), "w_sd_"),
+         add_stub(fmin(dat, g, use.g.names = F), "min_"),
+         add_stub(fmax(dat, g, use.g.names = F), "max_"))
+```
+
+With reordering
+
+```{r}
+add_vars(g[["groups"]],
+         add_stub(fmean(dat, g, weights, use.g.names = F), "w_mean_"),
+         add_stub(fsd(dat, g, weights, use.g.names = F), "w_sd_"),
+         add_stub(fmin(dat, g, use.g.names = F), "min_"),
+         add_stub(fmax(dat, g, use.g.names = F), "max_"),
+         pos = c(4,8,5,9,6,10,7,11))
+```
+
+```{r}
+microbenchmark(call = add_vars(g[["groups"]],
+         add_stub(fmean(dat, g, weights, use.g.names = FALSE), "w_mean_"),
+         add_stub(fsd(dat, g, weights, use.g.names = FALSE), "w_sd_"),
+         add_stub(fmin(dat, g, use.g.names = FALSE), "min_"),
+         add_stub(fmax(dat, g, use.g.names = FALSE), "max_")))
+```
+
+# Transformations with `TRA`
 
 
 
+- calculate weighted group means and use them to demean the data
+- calculate weighted group sd's and use them to scale the data
+- replace all observations by their group-minimum
+- replace all observations by their group-maximum
+
+```{r}
+add_vars(get_vars(mtcars, ind),
+         add_stub(fmean(dat, g, weights, "-"), "w_demean_"),
+         add_stub(fsd(dat, g, weights, "/"), "w_scalse_"),
+         add_stub(fmin(dat, g, "replace"), "min_"),
+         add_stub(fmax(dat, g, "replace"), "max_")) %>% 
+  head()
+```
+
+Modify `mtcars`
+
+```{r}
+pos <- as.integer(c(2,8,3,9,4,10,5,11))
+
+add_vars(mtcars, pos) <- c(
+  add_stub(fmean(dat, g, weights, "-"), "w_demean_"),
+  add_stub(fsd(dat, g, weights, "/"), "w_scale_"),
+  add_stub(fmin(dat, g, "replace"), "min_"),
+  add_stub(fmax(dat, g, "replace"), "max_")
+)
+head(mtcars)
+rm(mtcars)
+```
+
+Using `ftransform`
+
+```{r}
+settransform(mtcars,
+             carb_dwmed_cyl = fmedian(carb, cyl, weights, "-"),
+             carb_wsd_vs_am = fsd(carb, list(vs, am), weights, "replace"))
 
 
+rm(mtcars)
+```
+
+Multivariate
+
+```{r}
+settransform(mtcars, c(
+  fmedian(list(carb_dwmed_cyl = carb, mpg_dwmed_cyl = mpg), 
+          cyl, weights, "-"),
+  fsd(list(carb_wsd_vs_am = carb, mpg_wsd_vs_am = mpg), 
+      list(vs, am), weights, "replace")
+))
+```
+
+Nested (Computing the weighted 3rd quartile of mpg, grouped by cyl and carb being greater than it's weighted median, grouped by vs)
+
+```{r}
+settransform(mtcars,
+  mpg_gwQ3_cyl = fnth(
+    mpg, 0.75,
+    list(cyl, carb > fmedian(carb, vs, weights, 1L)),
+    weights, 1L
+  )
+)
+
+head(mtcars)
+rm(mtcars)
+```
 
 
