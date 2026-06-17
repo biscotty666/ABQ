@@ -7,11 +7,15 @@ format: gfm
 
 In the [last article](https://biscotty.net/posts/data-science/r-census/abq-demographics) I compared age, race, and educational attainment between council districts in Albuquerque. In some cases, the variation was striking. In particular, the third district seemed quite different from the others in a number of ways. Now I would like to apply some statistical testing to see if this impression is backed up statistically.
 
-To make the comparison, I will use some economic and demographic information obtained from `census.gov` using the `tidycensus` package.
+To make the comparison, I will use some economic and demographic information obtained from `census.gov` using the `tidycensus` package. This will include information such as income, housing and rent costs, race and education. The first part of the article will cover data preparation, which involves cleaning the raw census data and splitting the census tracts between the various districts.
 
-# Setup
+Once prepared, most of the data will prove not to be normally distributed, something which is normally necessary for analysis of variance tests. This section is concerned with finding a way to transform the data to allow for the variance testing.
 
-I will begin by loading the required libraries.
+Finally, I will perform a number of variance tests, and will be able to learn blah blah
+
+# Data Preparation
+
+I will begin by loading the required libraries and setting some constants.
 
 ```{r}
 #| message: false
@@ -21,12 +25,11 @@ libraries <- list(
   "corrr", "ggspatial", "ggtext", "patchwork", "sf",
   "spatialreg", "spdep", "tidycensus", "tidyverse", 
   "zeallot", "DescTools", "GWmodel", "scales", "glue",
-  "ggpubr", "units", "rstatix", "rcompanion", "collapse"
+  "ggpubr", "units", "rstatix", "rcompanion", "collapse",
+  "classInt", "nngeo"
 )
 invisible(lapply(libraries, library, character.only = TRUE))
 ```
-
-I'd like to check variance across a number of economic and demographic variables.
 
 ```{r}
 year <- 2024
@@ -34,7 +37,63 @@ crs <- 6528
 caption <- str_glue("Source: census.gov, acs5, {year}")
 ```
 
-## Load Data
+## Council Districts
+
+I'll begin by preparing the council district spatial dataset. Obtaining these programmatically is frankly hit-and-miss, so it's best to download them directly from the county and city websites. A peculiarity of Albuquerque is the fact that there are some "islands" of unincorporated territory entirely surrounded by a council district. I will use the `st_remove_holes()` function from the `nngeo` package, and treat these islands as part of the respective district.
+
+One of the peculiarities of Albuquerque is the fact that there are numerous areas in the geographic area of Albuquerque which are not incorporated into the city. This includes "islands" in the middle of districts, as well as areas on the fringe of the city limits. In order to capture this data, I will create an "Unincorporated" district, and choose a geographic extent for the study area. In order to specify the "Unincororated" area, I will take the _difference_ between the full county and the areas attributed to one of the districts or Los Ranchos. After giving this data their label, I bind the identified region back to the `council_dists` data frame.
+
+
+```{r}
+council_dists <-
+  st_read("data/BC_CityCouncil/ABQ_CityCouncils.shp") %>%
+  select(district = DISTRICTNU) %>%
+  arrange(district) %>% 
+  mutate(district = paste("District", district)) %>% 
+  st_remove_holes()
+los_ranchos <-
+  st_read("data/LosRanchos/LosRanchos.shp") %>%
+  select(district = Name)
+council_dists <-
+  rbind(council_dists, los_ranchos) %>%
+  st_transform(crs)
+```
+
+I would like to define a study area that is a bit smaller than the actual city limits, which will cut out some geographically outlying census tracts. I will also create geometries for the unincoporated area by taking the `st_difference` of the rectangular bounding box of the `council_dists` and the existing district geometries.
+
+```{r}
+difference <- 
+   st_difference(
+  st_as_sfc(st_bbox(council_dists)),
+  st_union(council_dists$geometry)
+) %>% 
+  st_as_sf() %>%
+  rename(geometry = x) %>% 
+  mutate(district = "Unincorporated")
+
+council_dists <- bind_rows(difference, council_dists)
+```
+
+```{r}
+#| warning: false
+dist_box = c(xmin = 452000, xmax = 479833, 
+             ymin = 443500, ymax = 467858)
+council_dists <- council_dists %>% 
+  st_crop(dist_box)
+```
+
+```{r}
+ggplot(council_dists, aes(color = district)) +
+  geom_sf() +
+  theme_void()
+```
+
+
+## Census Data
+
+### Fetching
+
+The `get_acs()` function obtains information from the American Community Survey tables. By supplying a named vector, the columns of the returned data table will be automatically renamed. Setting `geometry = TRUE` returns an `sf` object, and `output = "wide"` gives a column for each variable. After obtaining the data, I will remove the margin of error columns, remove the trailing "E" from the remaining column names, and transform the geometry to an appropriate coordinate reference system.
 
 ```{r}
 vars_census <- c(
@@ -51,16 +110,7 @@ vars_census <- c(
   College.Pct = "DP02_0068P",
   Population.Total = "B01003_001"
 )
-```
 
-```{r}
-#| eval: false
-tidycensus::load_variables(year, "acs5/profile") %>% 
-  View()
-```
- 
-
-```{r}
 bern_data <- get_acs(
   geography = "tract",
   state = "NM",
@@ -76,65 +126,15 @@ bern_data <- get_acs(
   st_transform(crs)
 ```
 
-## Clean Data
+### Cleaning
 
-Bernalillo County contains some regions which are far from the urban area, these regions being largely unpopulated and distantly connected to the city. I want to look at the areas of the county proximate to the city, so I will define bounds which encompass this region.
-
-
-
-One of the peculiarities of Albuquerque is the fact that there are numerous areas in the geographic area of Albuquerque which are not incorporated into the city. This includes "islands" in the middle of districts, as well as areas on the fringe of the city limits. In order to capture this data, I will create an "Unincorporated" district, and choose a geographic extent for the study area. In order to specify the "Unincororated" area, I will take the _difference_ between the full county and the areas attributed to one of the districts or Los Ranchos. After giving this data their label, I bind the identified region back to the `council_dists` data frame.
-
-### Council Districts
-
-```{r}
-council_dists <-
-  st_read("data/BC_CityCouncil/ABQ_CityCouncils.shp") %>%
-  select(district = DISTRICTNU) %>%
-  arrange(district) %>% 
-  mutate(district = paste("District", district))
-los_ranchos <-
-  st_read("data/LosRanchos/LosRanchos.shp") %>%
-  select(district = Name)
-council_dists <-
-  rbind(council_dists, los_ranchos) %>%
-  st_transform(crs)
-
-difference <- 
-   st_difference(
-  st_as_sfc(st_bbox(council_dists)),
-  st_union(council_dists$geometry)
-) %>% 
-  st_as_sf() %>%
-  rename(geometry = x) %>% 
-  mutate(district = "Unincorporated")
-
-council_dists <- bind_rows(difference, council_dists)
-```
-
-```{r}
-dist_box = c(xmin = 452000, xmax = 479833, 
-             ymin = 443500, ymax = 467858)
-council_dists <- council_dists %>% 
-  st_crop(dist_box)
-```
-
-
-
-```{r}
-ggplot(council_dists, aes(color = district)) +
-  geom_sf() +
-  theme_void()
-```
-
-### County Census Data
-
-Let's take a look at the data before splitting it.
+Let's take a look at the data before splitting it between districts.
 
 ```{r}
 summary(bern_data)
 ```
 
-There is some clean-up to do. There are some `na`s to explore, and oddities like areas where the population total is 0. I'll start there.
+There is some clean-up to do. There are some `na`s to explore, and oddities like areas where the population total is 0. I'll with the zero-population areas.
 
 ```{r}
 bern_data %>% 
@@ -151,12 +151,12 @@ ggplot(bern_data) +
   ) +
   theme_void() +
   lims(
-    x = c(435000, 475000),
-    y = c(444000, 455000)
+    x = dist_box[1:2],
+    y = dist_box[3:4]
   )
 ```
 
-This tract is the state fairgrounds. I'll just remove it.
+This tract is the state fairgrounds. The other is outside the study area. I'll remove them.
 
 ```{r}
 bern_data <- bern_data %>% 
@@ -164,7 +164,7 @@ bern_data <- bern_data %>%
 summary(bern_data)
 ```
 
-The population of 16 is still suspicious. 
+The population of 16 is suspicious. 
 
 ```{r}
 bern_data %>% 
@@ -179,10 +179,14 @@ ggplot(bern_data) +
     type = "osm", alpha = 0.7,
     zoomin = -1, cachedir = "~/.cache/maps/"
   ) +
-  theme_void()
+  theme_void() +
+  lims(
+    x = dist_box[1:2],
+    y = dist_box[3:4]
+  )
 ```
 
-This tract contains federal land, with no useful data. I'll remove this as well.
+This tract contains federal land, and no useful data. I'll remove this as well.
 
 ```{r}
 bern_data <- bern_data %>% 
@@ -196,13 +200,14 @@ bern_data %>%
   filter(if_any(everything(), is.na))
 ```
 
-This data seems worth preserving. I will interpolate these values based on the median values, but I would like the values to be based on the median for the specific district. I will need to split the districts at this point in order to calculate the values.
-
-Splitting the data involves intersecting the county data with the districts. Since some of the variables are extensive, representing counts, these values will need to be apportioned based on the percentage area represented by each subsection.
+This data seems worth preserving. I will fill in these values based on the median values for each variable, but I would like these values to be based on the median for the specific district, rather than an overall median. I will need to split the districts at this point in order to calculate the values.
 
 ## Create District Dataset
 
+Splitting the data involves intersecting the county data with the districts. Since some of the variables are extensive, representing counts, these values will need to be apportioned based on the percentage area represented by each subsection. I'll calculate the initial area of each tract, then the areas of each newly-created sub-section, allowing me to divide each tract's data by the percentage area lying in the new tracts.
+
 ```{r}
+#| warning: false
 dist_data <- bern_data %>% 
   mutate(area = st_area(.)) %>% 
   st_intersection(council_dists) %>% 
@@ -217,11 +222,6 @@ dist_data <- bern_data %>%
     )
 ```
 
-```{r}
-summary(dist_data)
-```
-
-
 Now I can calculate the per-district averages for the two variables.
 
 
@@ -234,13 +234,11 @@ var_avgs <- dist_data %>%
   summarise(across(
     all_of(vars_na),
     list(dist = \(x) median(x, na.rm = T))
-  )) %>%
-  ungroup()
-```
+  ))
 
-I'll make a small helper function to fill in the missing values.
+#%>%
+#  ungroup()
 
-```{r}
 fill_avgs <- function(var, replace) {
   if_else(is.na(var), replace, var)
 }
@@ -264,63 +262,72 @@ dist_data <- dist_data %>%
 summary(dist_data)
 ```
 
-That looks good. I'll remove the percentage column, and can proceed with exploring the data.
+That looks good. I'll remove unnecessary columns and limit the exploration to the augmented Albuquerque districts, and can proceed with exploring the data distributions.
 
 ```{r}
-dist_data <- dist_data %>% 
-  select(-c(area_pct, Population, Population.Density))
+abq_data <- dist_data  %>% 
+  select(-c(area_pct, Population, Population.Density)) %>% 
+  filter(!district %in% c("Los Ranchos", "Unincorporated"))
 ```
 
 
+# Data Normalization
 
-
-# Check Distributions
+To perform the standard analysis of variance, data is expected to be normally distributed. Further, there should be equality of variance across districts. 
 
 ## Visualize
 
-```{r}
-var_names <- names(dist_data)[-c(1, 13:14)]
-```
+I'll start by plotting the raw data.
 
 ```{r}
+var_names <- names(abq_data)[-c(1, 13:14)]
+
 plot_dist <- function(df, var) {
-  df %>% 
-   ggboxplot("district", var, fill = "district") +
-  geom_point(position = position_jitter(width = 0.1)) +
-  theme(axis.text.x = element_text(angle = 45, vjust = .5)) +
-  guides(fill = "none")
+  df %>%
+    ggboxplot("district", var, fill = "district") +
+    geom_point(position = position_jitter(width = 0.1)) +
+    theme(axis.text.x = element_text(angle = 45, vjust = .5)) +
+    guides(fill = "none") +
+    labs(caption = caption)
 }
 
-map(var_names, \(x) dist_data %>% plot_dist(x))
+c(p1, p2, p3, p4, p5, p6, p7, p8, p9) %<-%
+  map(var_names, \(x) abq_data %>% plot_dist(x))
 ```
+
+```{r}
+(p1 + p2)
+(p3 + p4)
+(p5 + p6)
+(p7 + p8)
+p9
+```
+
+I want to construct nine histograms and nine qqplots, and display them side-by-side with `patchwork`. This is where I really appreciate the functional programming aspects of __R__. To do this, I'll first create a histogram function. Note the `.data[[var]]` syntax. It is necessary to pass variables to `aes()` when using the `aes()` function within a function. Then I will use `map()` four times to produce the plots.
 
 ```{r}
 plot_hist <- function(df, var) {
-  df %>% 
+  df %>%
     ggplot(aes(.data[[var]])) +
     geom_histogram(aes(y = after_stat(density)),
-    fill = "lightgray", col = "black", bins = 20
-  ) +
-  geom_line(stat = "density", adjust = 2, color = "blue")
+      fill = "lightgray", col = "black", bins = 20
+    ) +
+    geom_line(stat = "density", adjust = 2, color = "blue") +
+    labs(caption = caption)
 }
 
-hists <- map(var_names, \(x) dist_data %>% plot_hist(x))
-vars_list <- map(var_names, \(x) pull(dist_data, x))
-lines <- map(vars_list, ggqqplot)
+hists <- map(var_names, \(x) abq_data %>% plot_hist(x))
+vars_list <- map(var_names, \(x) pull(abq_data, x))
+qqs <- map(vars_list, ggqqplot)
 map(1:length(hists),
-     \(x) hists[[x]] + lines[[x]])
+     \(x) hists[[x]] + qqs[[x]])
 ```
 
-```{r}
-abq_data <- dist_data %>% 
-  filter(!district %in% c("Unincorporated", "Los Ranchos"))
-```
+With a couple of exceptions, these variables do not appear to be normally distributed.
 
 ## Shapiro tests
 
-The shapiro test
-
-### Raw
+The Shapiro-Wilk test can be used to evaluate statistically whether a variable is normally distributed. The null hypothesis in this test is that the data is normally distributed. $p$-values less than 0.05 indicate that the null hypothesis should be rejected, implying that the data are not normally distributed. I'll start by running a `shapiro_test` on all of the variables, filtering for $p$-values greater than 0.05. These variables are normally distributed.
 
 ```{r}
 map(
@@ -333,21 +340,24 @@ map(
   collapse::unlist2d() %>%
   mutate(
     variable = var_names,
-    sig = if_else(p.value < .05, "Yes", "No")
+    sig = if_else(p.value <= .05, "Yes", "No")
   ) %>%
   select(-1) %>%
   filter(sig == "No")
 ```
 
-### Square-root transform
+## Transformations
+
+I'd like to test a number of different transformations, so I will create a function to do so and filter the data as above. Happily, in R, functions are first-class data types, allowing functions to be passed as arguments to functions. In fact, this custom function highlights the richness of R's functional programming capabilities, using the built-in `lapply()` and `purrr`'s `map()`. The pipe itself is akin to functional composition.
+
 
 ```{r}
-run_shapiro <- function(df, vars, fctn) {
+run_shapiro <- function(df, vars, f) {
   data <- map(
     vars,
     \(x) pull(df, x)
   ) %>%
-    lapply(fctn)
+    lapply(f)
   map(data, shapiro_test) %>%
     collapse::unlist2d() %>%
     mutate(
@@ -357,11 +367,15 @@ run_shapiro <- function(df, vars, fctn) {
     select(-1) %>%
     filter(sig == "No")
 }
+```
 
+I'll start with a simple square-root transformation.
+
+```{r}
 run_shapiro(abq_data, var_names, sqrt)
 ```
 
-### Cube root
+That doesn't help. How about a cube root?
 
 ```{r}
 cube_root <- function(x) {
@@ -371,7 +385,7 @@ cube_root <- function(x) {
 run_shapiro(abq_data, var_names, cube_root)
 ```
 
-### Log transform (ihs)
+That helps a little, but not much. I can't use a straight-forward log transformation due to the many 0 values, so I will use a modified log transformation.
 
 ```{r}
 ihs_transform <- function(x) {
@@ -381,11 +395,22 @@ ihs_transform <- function(x) {
 run_shapiro(abq_data, var_names, ihs_transform)
 ```
 
-### Elf transform
+That's even worse. I'll try an inverse normal transformation. This transformation is based on ranking, and is able to normalize highly skewed distributions. The downside of this transformation is that the "distance" between each observation is lost, obscuring information about the variability within the variable. The `blom()` function which performs the transformation defaults to a "general" method. 
+
+```{r}
+xf_blom <- partial(blom, method = "blom")
+run_shapiro(abq_data, var_names, xf_blom)
+```
 
 ```{r}
 run_shapiro(abq_data, var_names, blom)
 ```
+
+```{r}
+log_blom <- compose(xf_blom, ihs_transform)
+run_shapiro(abq_data, var_names, log_blom)
+```
+
 
 Remove non-standard variables.
 
@@ -399,6 +424,8 @@ var_names <- var_names[-3]
 ```{r}
 abq_data_elf <- abq_data %>% 
   mutate(across(all_of(var_names), ~ blom(.x)))
+abq_data_elf_2 <- abq_data %>% 
+  mutate(across(all_of(var_names), ~ log_blom(.x)))
 ```
 
 ## Distribution Plots
@@ -414,6 +441,15 @@ lines <- map(var_vals, ggqqplot)
 map(1:10,
      \(x) hists[[x]] + lines[[x]])
 ```
+
+```{r}
+hists <- map(var_names, \(x) abq_data_elf_2 %>% plot_hist(x))
+var_vals <- map(var_names, \(x) pull(abq_data_elf_2, x))
+lines <- map(var_vals, ggqqplot)
+map(1:10,
+     \(x) hists[[x]] + lines[[x]])
+```
+
 
 ## Equality of variance (Bartlett's test)
 
@@ -442,7 +478,7 @@ tibble(
 )
 ```
 
-# AOV
+# Variance Between Council Districts
 
 ## ANOVA
 
@@ -576,9 +612,46 @@ map(var_names,
 ```
 
 ```{r}
+abq_data %>% 
+  st_drop_geometry() %>% 
+  group_by(district) %>% 
+  summarise(Hisp.Pct = mean(Hisp.Pct))
+```
+
+
+```{r}
 var_names_str <- glue_collapse(var_names, sep = " + ")
-lm(as.formula(glue("district ~ {var_names_str}")),
-   data = abq_data_elf %>% st_drop_geometry())
+abq_data_elf <- abq_data_elf %>% 
+  mutate(
+    isDist1 = if_else(district == "District 1", 1, 0),
+    isDist2 = if_else(district == "District 2", 1, 0),
+    isDist3 = if_else(district == "District 3", 1, 0),
+    isDist4 = if_else(district == "District 4", 1, 0),
+    isDist5 = if_else(district == "District 5", 1, 0),
+    isDist6 = if_else(district == "District 6", 1, 0),
+    isDist7 = if_else(district == "District 7", 1, 0),
+    isDist8 = if_else(district == "District 8", 1, 0),
+    isDist9 = if_else(district == "District 9", 1, 0),
+  )
+dist_vars <- c("isDist1", "isDist2", "isDist3", 
+               "isDist4", "isDist5", "isDist6", 
+               "isDist7", "isDist8", "isDist9")
+forms <- map(
+  dist_vars,
+  \(x) as.formula(glue("{x} ~ {var_names_str}"))
+)
+logit_models <- map(
+  forms,
+  \(x) list(x,
+            glm(x, data = abq_data_elf, family = binomial(link = "logit")))
+)
+logit_models[[1]]
+map(logit_models, \(x) list(x[[1]], summary(x[[2]])))
+form = as.formula(glue("isDist1 ~ {var_names_str}"))
+logit_model <- glm(form,
+                   data = abq_data_elf, family = binomial(link = "logit"))
+summary(logit_model)
+
 abq_data_elf <- abq_data_elf %>% 
   mutate(dist_num = parse_number(district))
 abq_data <- abq_data %>% 
@@ -587,8 +660,135 @@ form <- as.formula(glue("dist_num ~ {var_names_str}"))
 lm(form,
    data = abq_data %>% st_drop_geometry()) %>% 
   summary()
-summary(abq_data_elf)
 ```
+
+## Spatial autocorrelation
+
+```{r}
+abq_data_nona <- abq_data %>% 
+  mutate(vbl = Income.Med) %>% 
+  filter(!is.na(vbl))
+nb <- poly2nb(abq_data_nona, queen = F, snap = 25)
+nbw <- nb2listw(nb, style = "W", zero.policy = T)
+
+gmoran <- moran.test(abq_data_nona$vbl, nbw, alternative = "two.sided")
+gmoran
+```
+
+```{r}
+moran.plot(abq_data_nona$vbl, nbw)
+```
+
+```{r}
+lmoran <- localmoran(abq_data_nona$vbl, nbw, alternative = "greater")
+head(lmoran)
+```
+
+```{r}
+abq_data_nona$lmI <- lmoran[, "Ii"] # local Moran's I
+abq_data_nona$lmZ <- lmoran[, "Z.Ii"] # z-scores
+abq_data_nona$lmp <- lmoran[, "Pr(z > E(Ii))"]
+```
+
+```{r}
+make_quantiles <- function(var) {
+  classIntervals(var, 5, style = "quantile")
+}
+
+quantile_breaks <- make_quantiles(abq_data_nona$Income.Med)
+br_quantile <- classIntervals(
+  abq_data_nona$Income.Med, 5,
+  style = "quantile"
+)
+abq_data_nona$Income.Med_q <- cut(
+  abq_data_nona$Income.Med, br_quantile$brks,
+  include.lowest = TRUE, dig.lab = 10
+)
+pal <- colorRampPalette(c("darkred", "darkgreen", "navy"))(length(br_quantile$brks))
+ggplot(abq_data_nona) +
+  geom_sf(aes(fill = Income.Med_q)) +
+  scale_fill_viridis_d() +
+  labs(fill = "Median Income") +
+  theme_void()
+```
+
+
+```{r}
+library(tmap)
+
+p1 <- tm_shape(abq_data_nona) +
+  tm_polygons(col = "vbl", title = "vbl", style = "quantile") +
+  tm_layout(legend.outside = TRUE)
+
+p2 <- tm_shape(abq_data_nona) +
+  tm_polygons(col = "lmI", title = "Local Moran's I",
+              style = "quantile") +
+  tm_layout(legend.outside = TRUE)
+
+p3 <- tm_shape(abq_data_nona) +
+  tm_polygons(col = "lmZ", title = "Z-score",
+              breaks = c(-Inf, 1.65, Inf)) +
+  tm_layout(legend.outside = TRUE)
+
+p4 <- tm_shape(abq_data_nona) +
+  tm_polygons(col = "lmp", title = "p-value",
+              breaks = c(-Inf, 0.05, Inf)) +
+  tm_layout(legend.outside = TRUE)
+
+tmap_arrange(p1, p2, p3, p4)
+```
+
+```{r}
+tmap5 <- tm_shape(abq_data_nona) + 
+  tm_polygons(col = "lmZ",
+              title = "Local Moran's I", 
+              style = "fixed",
+              breaks = c(-Inf, -1.96, 1.96, Inf),
+              labels = c("Negative SAC", "No SAC", "Positive SAC"),
+              palette =  c("blue", "white", "red")) +
+  tm_layout(legend.outside = TRUE)
+tmap5
+```
+
+## Clusters
+
+```{r}
+lmoran <- localmoran(abq_data_nona$vbl, nbw, alternative = "two.sided")
+head(lmoran)
+```
+
+```{r}
+abq_data_nona$lmp <- lmoran[, 5]
+mp <- moran.plot(as.vector(scale(abq_data_nona$vbl)), nbw)
+```
+
+```{r}
+abq_data_nona$quadrant <- NA
+abq_data_nona[(mp$x >= 0 & mp$wx >= 0) & (abq_data_nona$lmp <= 0.05), "quadrant"] <- 1
+abq_data_nona[(mp$x <= 0 & mp$wx <= 0) & (abq_data_nona$lmp <= 0.05), "quadrant"] <- 2
+abq_data_nona[(mp$x >= 0 & mp$wx <= 0) & (abq_data_nona$lmp <= 0.05), "quadrant"] <- 3
+abq_data_nona[(mp$x <= 0 & mp$wx >= 0) & (abq_data_nona$lmp <= 0.05), "quadrant"] <- 4
+abq_data_nona[(abq_data_nona$lmp > 0.05), "quadrant"] <- 5
+```
+
+```{r}
+tm_shape(abq_data_nona) +
+  tm_fill(
+    col = "quadrant", title = "",
+    breaks = c(1, 2, 3, 4, 5, 6),
+    palette = c("red", "blue", "lightpink", "skyblue2", "white"),
+    labels = c(
+      "High-High", "Low-Low", "High-Low",
+      "Low-High", "Non-significant"
+    )
+  ) +
+  tm_legend(text.size = 1) + tm_borders(alpha = 0.5) +
+  tm_layout(frame = FALSE, title = "Clusters") +
+  tm_layout(legend.outside = TRUE)
+```
+
+
+# Save data
 
 ```{r}
 data_sets <- c(
