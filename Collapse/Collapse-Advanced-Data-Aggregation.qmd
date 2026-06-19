@@ -1,0 +1,118 @@
+---
+title: "Collapse Advanced Data Aggregation"
+format: gfm
+---
+
+
+[Source](https://fastverse.org/collapse/articles/collapse_intro.html)
+
+```{r}
+#| message: false
+library(collapse)
+library(magrittr)
+library(microbenchmark)
+options(paged.print = FALSE)
+```
+
+`collap`
+
+```{r}
+weights <- abs(rnorm(fnrow(mtcars)))
+collap(mtcars,
+       mpg + disp ~ cyl + vs + am,
+       list(fmean, fsd, fmin, fmax),
+       w = weights, keep.col.order = F)
+```
+
+Suppose we would like to aggregate `wlddev` data by country and decade, but keep all that categorical information. 
+
+```{r}
+collap(wlddev, ~ iso3c + decade) %>% head()
+```
+
+`collap` syntax.
+
+```{r}
+#| eval: false
+collap(X, by, 
+       FUN = fmean, catFUN = fmode, 
+       cols = NULL, 
+       w = NULL, wFUN = fsum,
+       custom = NULL, 
+       keep.by = TRUE, keep.w = TRUE, keep.col.order = TRUE,
+       sort.row = TRUE, 
+       parallel = FALSE, mc.cores = 1L,
+       return = c("wide","list","long","long_dupl"), 
+       give.names = "auto") # , ...
+```
+
+Suppose we only want to aggregate 4 series in this dataset.
+
+```{r}
+collap(wlddev,
+       PCGDP + LIFEEX + GINI + ODA ~ iso3c + decade) %>% 
+  head()
+collap(wlddev, 
+       ~ iso3c + decade, cols = 9:12) %>% 
+  head()
+```
+
+Using multiple functions
+
+```{r}
+collap(wlddev,
+       ~ iso3c + decade,
+       list(fmean, fmedian, fsd),
+       cols = 9:12) %>% 
+  head()
+```
+
+Return long-format data
+
+```{r}
+collap(wlddev,
+       ~ iso3c + decade,
+       list(fmean, fmedian, fsd),
+       cols = 9:12,
+       return = "long") %>% 
+  head()
+```
+
+The `custom` argument allows the user to circumvent the broad distinction into numeric and categorical data (and the associated `FUN` and `catFUN` arguments) and specify exactly which columns to aggregate using which functions.
+
+```{r}
+collap(wlddev,
+       ~ iso3c + decade,
+       custom = list(
+         fmean = 9:10, fmedian = 11:12,
+         ffirst = c("country", "region", "income"),
+         flast = c("year", "date"),
+         fmode = "OECD"
+       )) %>% 
+  head()
+```
+
+It is also possible to perform weighted aggregations and append functions with _uw to yield an unweighted computation.
+
+```{r}
+collap(wlddev,
+       ~ region + year,
+       w = ~ POP,
+       custom = list(
+         fmean = 9:10, fmedian_uw = 11:12,
+         ffirst_uw = c("country", "region", "income"),
+         flast_uw = c("year", "date"),
+         fmode = "OECD"
+       ),
+       keep.w = FALSE) %>% 
+  head()
+```
+
+
+
+
+
+
+
+
+
