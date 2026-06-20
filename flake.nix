@@ -52,6 +52,7 @@
               crimedatasets
               crsuggest
               geojsonsf
+              fixest
               ggpubr
               ggridges
               ggspatial
