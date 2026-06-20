@@ -1,0 +1,299 @@
+---
+title: "Collapse and sf"
+format: gfm
+---
+
+
+[Source](https://fastverse.org/collapse/articles/collapse_intro.html)
+
+```{r}
+#| message: false
+library(collapse)
+library(magrittr)
+library(sf)
+library(microbenchmark)
+library(dplyr)
+options(paged.print = FALSE)
+```
+
+
+```{r}
+(nc <- st_read(system.file("shape/nc.shp", package = "sf"), quiet = T))
+```
+
+# Summarising Data Frames
+
+Which columns have at least 2 non-missing distinct values
+
+```{r}
+varying(nc)
+```
+
+```{r}
+qsu(nc)
+```
+
+```{r}
+descr(nc)
+```
+
+# Selecting Columns and Subsetting
+
+```{r}
+nc %>% fselect(AREA, NAME:FIPSNO)
+```
+
+Same using standard evaluation (`gv` is a shorthand for `get_vars()`)
+
+```{r}
+get_vars(nc, c("AREA", "NAME", "FIPS", "FIPSNO"))
+```
+
+Subsetting rows and columns
+
+```{r}
+fsubset(nc, AREA > fmean(AREA), AREA, NAME:FIPSNO)
+```
+
+A fast version of `[` (where i is used and optionally j)
+
+```{r}
+nc %>% 
+  ss(1:10, c("AREA", "NAME", "FIPS", "FIPSNO"))
+```
+
+## Benchmarks
+
+Selection
+
+```{r}
+microbenchmark(
+  collapse = fselect(nc, AREA, NAME:FIPSNO),
+  dplyr = select(nc, AREA, NAME:FIPSNO),
+  collapse2 = gv(nc, c("AREA", "NAME", "FIPS", "FIPSNO")),
+  sf = nc[c("AREA", "NAME", "FIPS", "FIPSNO")]
+)
+```
+
+Subsetting
+
+```{r}
+microbenchmark(
+  collapse = fsubset(nc, AREA > fmean(AREA), AREA, NAME:FIPSNO),
+  dplyr = select(nc, AREA, NAME:FIPSNO) |> filter(AREA > fmean(AREA)),
+  collapse2 = ss(nc, 1:10, c("AREA", "NAME", "FIPS", "FIPSNO")),
+  sf = nc[1:10, c("AREA", "NAME", "FIPS", "FIPSNO")]
+)
+
+```
+
+```{r}
+attr(nc, "agr")
+```
+
+However, collapse functions don’t subset the ‘agr’ attribute on selecting columns, which (if specified) relates columns (attributes) to the geometry, and also don’t modify the ‘bbox’ attribute giving the overall boundaries of a set of geometries when subsetting the sf data frame. Not changing ‘bbox’ upon subsetting may lead to too large margins when plotting the geometries of a subset sf data frame.
+
+One way to to change this is calling `st_make_valid()` on the subset frame; but it is very expensive, thus unless the subset frame is very small, it is better to use `[`, `base::subset()` or `dplyr::filter()` in cases where the bounding box size matters.
+
+# Aggregation and Grouping
+
+Aggregating by variable SID74 using the median for numeric and the mode for categorical columns
+
+```{r}
+nc %>% collap(
+  ~ SID74,
+  custom = list(
+    fmedian = is.numeric,
+    fmode = is.character,
+    st_union = "geometry"
+  )
+)
+```
+
+Grouping and aggregating with `fsummarise`
+
+```{r}
+nc %>% 
+  fgroup_by(SID74) %>% 
+  fsummarise(AREA_Ag = fsum(AREA),
+             Perimeter_Ag = fmedian(PERIMETER),
+             geometry = st_union(geometry))
+```
+
+`st_union` is slow. For a faster alternative, use `geos` for planar and `s2` for spherical geometries.
+
+```{r}
+nc %>% 
+  fmutate(geometry = s2::as_s2_geography(geometry)) %>% 
+  fgroup_by(SID74) %>% 
+  fsummarise(AREA_Ag = fsum(AREA),
+             Perimeter_Ag = fmedian(PERIMETER),
+             geometry = s2::s2_union_agg(geometry)) %>% 
+  fmutate(geometry = st_as_sfc(geometry))
+```
+
+```{r}
+st_crs(nc)
+```
+
+In general, also upon aggregation with collapse, functions `st_as_sfc()`, `st_as_sf()`, or, in the worst case, `st_make_valid()`, may need to be invoked to ensure valid sf object output. 
+
+One exception that both avoids the high cost of spatial functions in aggregation and any need for ex-post conversion/validation is aggregating spatial panel data over the time-dimension. Such panels can quickly be aggregated using `ffirst()` or `flast()` to aggregate the geometry:
+
+Creating a panel-dataset by simply duplicating nc for 2 different years
+
+```{r}
+(pnc <- rowbind(`2000` = nc, `2001` = nc, idcol = "Year") %>% 
+   as_integer_factor())
+```
+
+Aggregating by `NAME`, using the last value for all categorical data
+
+```{r}
+pnc %>% collap(
+  ~ NAME, fmedian, catFUN = flast, cols = -1L
+)
+```
+
+Using `fsummarise` to aggregate just two variables and the geometry
+
+```{r}
+(pnc_ag <- pnc %>% 
+   fgroup_by(NAME) %>% 
+   fsummarise(AREA_Ag = fsum(AREA),
+              Perimeter_Ag = fmedian(PERIMETER),
+              geometry = flast(geometry)))
+```
+
+```{r collapse-sf}
+plot(pnc_ag["AREA_Ag"])
+```
+
+# Indexing
+
+```{r}
+(pnc <- pnc %>% findex_by(CNTY_ID, Year))
+```
+
+```{r}
+qsu(pnc$AREA)
+```
+
+```{r}
+settransform(pnc, AREA_diff = fdiff(AREA))
+psmat(pnc$AREA_diff) %>% head()
+pnc <- unindex(pnc)
+```
+
+# Unique Values, Ordering, Splitting, Binding
+
+`funique()` and `roworder[v]()` ignore the geometry column. `rsplit()` can recursively split an `sf` frame into multiple chunks.
+
+Split by `SID74`
+
+```{r}
+funique(nc$SID74)
+```
+
+
+```{r}
+rsplit(nc, ~ SID74) %>% 
+  head(2)
+```
+
+Only splitting Area
+
+```{r}
+rsplit(nc, AREA ~ SID74) %>% 
+  head(1)
+```
+
+Combine with `rowbind()`, which preserves the attributes of the first object by default.
+
+```{r}
+nc_combined <- nc %>% 
+  rsplit(seq_row(.)) %>% 
+  rowbind()
+identical(nc_combined, nc)
+```
+
+# Transformations
+
+```{r}
+nc %>% 
+  fmutate(gsum_AREA = fsum(AREA, SID74, TRA = "fill")) %>% 
+  head
+```
+
+Can also do this, but more expensive:
+
+```{r}
+nc %>% 
+  fgroup_by(SID74) %>% 
+  fmutate(gsum_AREA = fsum(AREA)) %>% 
+  head
+```
+
+`fcompute()` only keeps new columns, but also `geometry`. Additional columns can be retained with `keep`.
+
+```{r}
+nc %>% 
+  fcompute(scaled_AREA = fscale(AREA),
+           gsum_AREA = fsum(AREA, SID74, TRA = "fill"),
+           keep = .c(AREA, SID74))
+```
+
+# Conversion to and from `sf`
+
+The quick converters can be used on `sf` objects. To convert back, use `setAttrib()`, `copyAttrib()` or `copyMostAttrib()`.
+
+```{r}
+#| message: false
+library(data.table)
+qDT(nc)[, list(roll_AREA = frollmean(AREA, 2), geometry),
+  by = SID74
+] %>%
+  copyMostAttrib(nc)
+```
+
+The fastest way to remove the geometry column is `atomic_elem()`
+
+```{r}
+qDT(atomic_elem(nc)) %>% head
+```
+
+This can be used in `join()` and `pivot()` to remove geometries.
+
+Use atomic_elem() to strip geometry off y in left join
+
+```{r}
+identical(nc, join(nc, atomic_elem(nc), overid = 2))
+```
+
+In pivot: presently need to specify what to do with geometry column
+
+```{r}
+pivot(nc, c("CNTY_ID", "geometry")) %>% head
+```
+
+```{r}
+qDT(atomic_elem(nc)) %>% 
+  pivot("CNTY_ID") %>% head
+```
+
+# `units` Support
+
+```{r}
+nc_dist <- st_centroid(nc) %>% st_distance()
+fmean(nc_dist) %>% head
+fndistinct(nc_dist) %>% head
+```
+
+
+
+
+
+
+
+
+
