@@ -1,0 +1,376 @@
+---
+title: "Efficient Coding with Collapse"
+format: gfm
+---
+
+
+[Source](https://fastverse.org/collapse/articles/developing_with_collapse.html)
+
+```{r}
+#| message: false
+library(collapse)
+library(magrittr)
+library(microbenchmark)
+options(paged.print = FALSE)
+```
+
+# Be Minimalistic in Computations
+
+A key for very efficient code is to use the minimal required operations/objects to get the job done. 
+
+Eg, if a grouping vector `g` is used only once, use internal grouping instead.
+
+```{r}
+fmean(mtcars$mpg, mtcars$cyl)
+```
+
+```{r}
+fmean(mtcars$mpg, mtcars$cyl, TRA = "fill")
+```
+
+For aggregation, use unsorted grouping, eg.
+
+`fsum(x, qF(g, sort = FALSE))` or `fsum(x, qG(g, sort = FALSE), use.g.names = FALSE)` if group names aren't needed. `na.exclude = FALSE` should be used with `qF()` and `qG()`.
+
+If `g` is a plain vector of the first-appearance order should be preserved, use `group(g)` instead of `qG(g, sort = FALSE, na.exclude = FALSE)`. Set `use.g.names = FALSE` and `na.rm = FALSE` when possible.
+
+```{r}
+x <- rnorm(1e7) # 10 million random obs
+g <- sample.int(1e6, 1e7, TRUE) # 1 Million random groups
+oldopts <- set_collapse(na.rm = FALSE)
+microbenchmark(
+  internal = fsum(x, g),
+  internal_expand = fsum(x, g, TRA = "fill"),
+  qF1 = fsum(x, qF(g, sort = FALSE)),
+  qF2 = fsum(x, qF(g, sort = FALSE, na.exclude = FALSE)),
+  qG1 = fsum(x, qG(g, sort = FALSE), use = FALSE),
+  qG2 = fsum(x, qG(g, sort = FALSE, na.exclude = FALSE), use = FALSE),
+  group = fsum(x, group(g), use = FALSE), # Same as above basically
+  GRP1 = fsum(x, GRP(g)), 
+  GRP2 = fsum(x, GRP(g, sort = FALSE)), 
+  GRP3 = fsum(x, GRP(g, sort = FALSE, return.groups = FALSE), use = FALSE)
+)
+```
+
+Factors and ‘qG’ objects are efficient inputs to all statistical/transformation functions except for
+- `fmedian()`, `fnth()`, `fmode()`, `fndistinct()`
+- split-apply-combine operations using `BY()`/`gsplit()`
+
+For these, great a `GRP` object. Set `sort = FALSE` and `return.groups = FALSE` if not needed.
+
+```{r}
+f <- qF(g); f2 <- qF(g, na.exclude = F)
+gg <- group(g) # Same as qG(g, sort = FALSE, na.exclude = FALSE)
+grp <- GRP(g)
+microbenchmark(
+  factor = fsum(x, f),
+  factor_nona = fsum(x, f2),
+  qG_nona = fsum(x, gg),
+  qG_nona_nonam = fsum(x, gg, use = FALSE),
+  GRP = fsum(x, grp),
+  GRP_nonam = fsum(x, grp, use = FALSE)
+)
+```
+
+`qF()`/`qG()` are a bit smarter than `group()` when it comes to handling input factors/‘qG’ objects because `group()` hashes every vector:
+
+```{r}
+microbenchmark(
+  factor_factor = qF(f),
+  # This checks NA's and adds 'na.included' class -> full deep copy
+  factor_factor2 = qF(f, na.exclude = FALSE), 
+  # NA checking costs.. incurred in fsum() and friends
+  check_na = collapse:::is.nmfactor(f), 
+  check_na2 = collapse:::is.nmfactor(f2),
+  factor_qG = qF(gg),
+  qG_factor = qG(f),
+  qG_qG = qG(gg),
+  group_factor = group(f),
+  group_qG = group(gg)
+)
+```
+
+Only in rare cases are grouped/indexed data frames created with fgroup_by()/findex_by() needed in package code. Likewise, functions like fsummarise()/fmutate() are essentially wrappers.
+
+```{r}
+mtcars %>% 
+  fgroup_by(cyl, vs, am) %>% 
+  fsummarise(mpg = fsum(mpg),
+             across(c(carb, hp, qsec), fmean))
+```
+
+is the same as
+
+```{r}
+g <- GRP(mtcars, c("cyl", "vs", "am"))
+
+add_vars(g$groups,
+         get_vars(mtcars, "mpg") %>% 
+           fsum(g, use = FALSE),
+         get_vars(mtcars, c("carb", "hp", "qsec")) %>% 
+           fmean(g, use = FALSE))
+```
+
+```{r}
+microbenchmark(
+  fgroup = mtcars %>%
+    fgroup_by(cyl, vs, am) %>%
+    fsummarise(
+      mpg = fsum(mpg),
+      across(c(carb, hp, qsec), fmean)
+    ),
+  addvar = add_vars(
+    g$groups,
+    get_vars(mtcars, "mpg") %>%
+      fsum(g, use = FALSE),
+    get_vars(mtcars, c("carb", "hp", "qsec")) %>%
+      fmean(g, use = FALSE)
+  )
+)
+```
+
+# Memory
+
+`x[x == 0] <- NA` creates a logical vector of 1 million elements. `setv(x, 0, NA)` is the efficient equivalent.
+
+```{r}
+x <- abs(round(rnorm(1e6)))
+y <- abs(round(rnorm(1e6)))
+microbenchmark(
+  lvec = x[x == 0] <- NA,
+  coll = setv(y, 0, NA)
+)
+```
+
+
+
+```{r}
+x1 <- abs(round(rnorm(1e6)))
+x2 <- abs(round(rnorm(1e6)))
+y <- rnorm(1e6)
+microbenchmark(
+  lvec = x1[is.na(x1)] <- y[is.na(x1)],
+  coll = setv(x2, NA, y)
+)
+```
+
+Logical vectors are inefficient compared to indices.
+
+```{r}
+xNA <- na_insert(x, prop = 0.4)
+xmiss <- is.na(xNA)
+ind <- which(xmiss)
+microbenchmark(x[xmiss], x[ind])
+```
+
+With `collapse`, they can be created directly using `whichNA(xNA)` in this case, or `whichv(x, 0)` for `which(x == 0)` or any other number. Also here there exist an `invert = TRUE` argument covering the `!=` case. For convenience, infix operators `x %==% 0` and `x %!=% 0` wrap `whichv(x, 0)` and `whichv(x, 0, invert = TRUE)`, respectively.
+
+Use %iin% instead of %in%.
+
+```{r}
+microbenchmark(
+  `%in%` = fsubset(wlddev, iso3c %in% c("USA", "DEU", "ITA", "GBR")),
+  `%iin%` = fsubset(wlddev, iso3c %iin% c("USA", "DEU", "ITA", "GBR"))
+)
+```
+
+`anyNA()`, `allNA()`, `anyv()` and `allv()` are faster than, eg, `any(x == 0)` `na_rm(x)` is faster than `x[!is.na(x)]`.
+
+With `ss()`, index checks can be avoided using `check = FALSE`.
+
+```{r}
+ind <- wlddev$iso3c %!iin% c("USA", "DEU", "ITA", "GBR")
+microbenchmark::microbenchmark(
+  withcheck = ss(wlddev, ind),
+  nocheck = ss(wlddev, ind, check = FALSE)
+)
+```
+
+Inefficiencies can come from copies produced in statistical operations.
+
+```{r}
+x <- rnorm(100); y <- rnorm(100); z <- rnorm(100)
+```
+
+This produces 2 copies
+
+```{r}
+res <- x + y + z
+```
+
+Instead, from `kit`, use `psum(x, y, z)` or
+
+```{r}
+res <- x + y
+res %+=% z
+```
+
+For operations between vectors and rows, use `rowwise` argument.
+
+```{r}
+m <- qM(mtcars)
+setop(m, "*", seq_col(m), rowwise = T)
+head(m / qM(mtcars))
+```
+
+Some functions like `na_locf()`/`na_focb()` also have set = TRUE arguments to perform operations by reference. There is also `setTRA()` for (grouped) transformations by reference, wrapping `TRA(..., set = TRUE)`.
+
+Replace Sepal.Length with group median.
+
+```{r}
+fmedian(iris$Sepal.Length, iris$Species,
+        TRA = "fill", set = TRUE)
+head(iris)
+data(iris)
+```
+
+This is the same as
+
+```{r}
+setTRA(iris$Sepal.Length, 
+       fmedian(iris$Sepal.Length, iris$Species), 
+       "fill", iris$Species)
+head(iris)
+data(iris)
+```
+
+```{r}
+head(iris)
+```
+
+`set` can be invoked anywhere. The following turns columns of the matrix into proportions.
+
+```{r}
+fsum(m, TRA = "/", set = TRUE)
+fsum(m)
+```
+
+Example of an efficient function for univariate linear regression.
+
+```{r}
+greg <- function(y, x, g) {
+  g <- group(g)
+  dmx <- fmean(x, g, TRA = "-", na.rm = FALSE)
+  (fsum(y, g, dmx, use = FALSE, na.rm = FALSE) %/=%
+      fsum(dmx, g, dmx, use = FALSE, na.rm = FALSE))
+}
+
+y <- rnorm(1e7)
+x <- rnorm(1e7)
+g <- sample.int(1e6, 1e7, TRUE)
+microbenchmark(greg(y, x, g), group(g))
+```
+
+The expression computed by `greg()` amounts to `sum(y * (x - mean(x)))/sum((x - mean(x))^2)` for each group, which is equivalent to `cov(x, y)/var(x)`, but very efficient, requiring exactly one full copy of x to create a group-demeaned vector, `dmx`, and then using the w (weights) argument to `fsum()` to sum the products (`y * dmx` and `dmx * dmx`) on the fly, including a division by reference avoiding an additional copy. 
+
+# Prefer primitive R objects and functions
+
+Vectors, matrices and lists are good, data frames and complex objects are bad.
+
+```{r}
+#| warning: false
+l <- unclass(mtcars)
+nam <- names(mtcars)
+microbenchmark(
+  names(mtcars),
+  attr(mtcars, "names"),
+  names(l),
+  names(mtcars) <- nam, 
+  attr(mtcars, "names") <- nam, 
+  names(l) <- nam,
+  mtcars[["mpg"]],
+  .subset2(mtcars, "mpg"), 
+  l[["mpg"]],
+  mtcars[3:8], 
+  .subset(mtcars, 3:8), 
+  l[3:8],
+  ncol(mtcars), 
+  length(mtcars), 
+  length(unclass(mtcars)), 
+  length(l),
+  nrow(mtcars), 
+  length(.subset2(mtcars, 1L)), 
+  length(l[[1L]])
+)
+
+```
+
+```{r}
+microbenchmark(
+  nrow(mtcars),
+  length(unclass(mtcars)[[1L]])
+)
+```
+
+By means of further illustration, let’s recreate the pwnobs() function in collapse which counts pairwise missing values. The list method is written in R. A basic implementation is
+
+```{r}
+pwnobs_list <- function(X) {
+  dg <- fnobs(X)
+  n <- ncol(X)
+  nr <- nrow(X)
+  N.mat <- diag(dg)
+  for (i in 1:(n - 1L)) {
+    miss <- is.na(X[[i]])
+    for (j in (i + 1L):n) N.mat[i, j] <- N.mat[j, i] <- 
+        nr - sum(miss | is.na(X[[j]]))
+  }
+  rownames(N.mat) <- names(dg)
+  colnames(N.mat) <- names(dg)
+  N.mat
+}
+mtcNA <- na_insert(mtcars, prop = 0.2)
+pwnobs_list(mtcNA)
+```
+
+Optimized version.
+
+```{r}
+pwnobs_list_opt <- function(X) {
+  dg <- fnobs.data.frame(X)
+  class(X) <- NULL
+  n <- length(X)
+  nr <- length(X[[1L]])
+  N.mat <- diag(dg)
+  for (i in 1:(n - 1L)) {
+    miss <- is.na(X[[i]])
+    for (j in (i + 1L):n) N.mat[i, j] <- N.mat[j, i] <- 
+        nr - sum(miss | is.na(X[[j]]))
+  }
+  dimnames(N.mat) <- list(names(dg), names(dg))
+  N.mat
+}
+
+identical(pwnobs_list(mtcNA), pwnobs_list_opt(mtcNA))
+microbenchmark(
+  pwnobs_list(mtcNA), pwnobs_list_opt(mtcNA)
+)
+```
+
+Avoid `as.data.frame` and related.
+
+```{r}
+attr(l, "row.names") <- .set_row_names(length(l[[1L]]))
+class(l) <- "data.frame"
+head(l, 2)
+```
+
+```{r}
+#| warning: false
+library(data.table)
+library(tibble)
+microbenchmark(qDT(mtcars), as.data.table(mtcars),
+                               qTBL(mtcars), as_tibble(mtcars))
+
+```
+
+```{r}
+l <- unclass(mtcars)
+microbenchmark(qDF(l), as.data.frame(l), 
+               as.data.table(l), as_tibble(l))
+```
+
+Another efficient workflow for general data frame-like objects is to save the attributes `ax <- attributes(data)`, manipulate it as a list `attributes(data) <- NULL`, modify `ax$names` and `ax$row.names` as needed and then use `setattrib(data, ax)` before returning.
+
+
+
