@@ -1,0 +1,413 @@
+---
+title: "Collapse Data Transformations"
+format: gfm
+---
+
+
+[Source](https://fastverse.org/collapse/articles/collapse_intro.html)
+
+```{r}
+#| message: false
+library(collapse)
+library(magrittr)
+library(microbenchmark)
+options(paged.print = FALSE)
+```
+
+# Row and Column Arithmetic
+
+`collapse` introduces a set of efficient row- and column-wise arithmetic operators for matrix-like objects: 
+
+- `%rr%`, `%r+%`, `%r-%`, `%r*%`, `%r/%`
+- `%cr%`, `%c+%`, `%c-%`, `%c*%`, `%c/%`.
+
+```{r}
+X <- qM(fselect(GGDC10S, AGR:SUM))
+(v <- fsum(X))
+```
+
+Divide the rows of X by v
+
+```{r}
+microbenchmark(t(t(X) / v),
+              X / outer(rep(1, nrow(X)), v), 
+              X %r/% v)
+```
+
+Data frame row operations
+
+```{r}
+dat <- fselect(GGDC10S, AGR:SUM)
+microbenchmark(dat %r/% v,
+               copyAttrib(mapply(`/`, dat, v, SIMPLIFY = FALSE), dat))
+```
+
+Data frame column arithmetic is slow
+
+```{r}
+microbenchmark(dat / dat$SUM,
+               dat / 5,
+               dat / dat,
+               dat %c/% dat$SUM,
+               dat %c/% 5,
+               dat %c/% dat)
+```
+
+# Row and Column Data Apply
+
+```{r}
+dapply(mtcars, median)
+dapply(mtcars, median, MARGIN = 1)
+```
+
+```{r}
+dapply(mtcars, quantile)
+```
+
+`dapply` preserves data structure
+
+```{r}
+m <- qM(mtcars)
+is.data.frame(dapply(mtcars, log))
+is.matrix(dapply(m, log))
+```
+
+Can also perform conversion
+
+```{r}
+identical(log(m), dapply(mtcars, log, return = "matrix"))
+identical(dapply(mtcars, log), dapply(m, log, return = "data.frame"))
+```
+
+# Split-Apply-Combine Computing
+
+`BY` is a generalization of dapply for grouped computations using functions that are not part of the Fast Statistical Functions introduced above. It is however not faster than dplyr or data.table for larger grouped computations on data frames requiring split-apply-combine computing.
+
+```{r}
+v <- iris$Sepal.Length
+f <- iris$Species
+```
+
+Sum by species, about 2x faster than tapply(v, f, sum)
+
+```{r}
+BY(v, f, sum)
+```
+
+Species quantiles: by default stacked
+
+```{r}
+BY(v, f, quantile)
+BY(v, f, quantile, expand.wide = T)
+```
+
+Matrix method
+
+```{r}
+miris <- qM(num_vars(iris))
+BY(miris, f, sum)
+BY(miris, f, quantile) %>% head()
+BY(miris, f, quantile, expand.wide = T)[, 1:5]
+```
+
+# Fast (Grouped) Replacing and Sweeping-out Statistics
+
+The 10 operations supported by `TRA` are:
+
+- 1 - “replace_fill” : replace and overwrite missing values (same as dplyr::mutate)
+- 2 - “replace” : replace but preserve missing values
+- 3 - “-” : subtract (center)
+- 4 - “-+” : subtract group-statistics but add average of group statistics
+- 5 - “/” : divide (scale)
+- 6 - “%” : compute percentages (divide and multiply by 100)
+- 7 - “+” : add
+- 8 - “*” : multiply
+- 9 - “%%” : modulus
+- 10 - “-%%” : subtract modulus
+
+The code below computes the column means of the iris-matrix obtained above, and uses them to demean that matrix. `fwithin` is generally fastest.
+
+```{r}
+stats <- fmean(miris)
+microbenchmark(sweep(miris, 2, stats, "-"),
+               miris - outer(rep(1, nrow(iris)), stats),
+               TRA(miris, fmean(miris), "-"),
+               miris %r-% fmean(miris), # a wrapper for TRA
+               fmean(miris, TRA = "-"), # better for any operation if the stats are not needed
+               fwithin(miris))
+```
+
+Simple replacing. Same as `fmean(miris, TRA = "replace")` or ``fbetween(miris)`
+
+```{r}
+TRA(miris, fmean(miris), "replace") %>% head(3)
+```
+
+Simple scaling
+
+```{r}
+TRA(miris, fsd(miris), "/") %>% head()
+```
+
+Grouped operations
+
+## Grouped centering
+
+same as `fmean(miris, f, TRA = "-")` or `fwithin(m, f)`
+
+```{r}
+microbenchmark(
+  TRA(miris, fmean(miris, f), "-", f) %>% head(),
+  fwithin(miris, f))
+```
+
+```{r}
+fwithin(miris, f) %>% head()
+```
+
+## Grouped replacing
+
+```{r}
+TRA(miris, fmean(miris, f), "replace", f) %>% head(3)
+```
+
+```{r}
+microbenchmark(
+  TRA(miris, fmean(miris, f), "replace", f),
+  fbetween(miris, f)
+)
+```
+
+## Groupwise percentages
+
+```{r}
+TRA(miris, fsum(miris, f), "%", f) %>% head(3)
+```
+
+# Fast Standardizing
+
+The function `fscale` can be used to efficiently standardize (i.e. scale and center) data using a numerically stable online algorithm. The standardization-operator `STD` also exists as a wrapper around `fscale`. By default `STD` adds a prefix to standardized variables and also provides an enhanced method for data frames.
+
+```{r}
+fscale(mtcars) %>% head(2)
+STD(mtcars) %>% head(2)
+```
+
+```{r}
+STD(mtcars) %>% qsu()
+```
+
+Groupwise and weighted scaling. Standardize across countries and sectors:
+
+```{r}
+STD_GGDC10S <- STD(GGDC10S,
+                   ~ Variable + Country,
+                   cols = 6:16)
+head(STD_GGDC10S)
+```
+
+Correlated Standardized Value-Added across countries
+
+```{r}
+fsubset(STD_GGDC10S, Variable == "VA", STD.AGR:STD.SUM) %>% 
+  pwcor()
+```
+
+# Fast Centering and Averaging
+
+`fbetween` for centering, `fwithin` for averaging.
+
+```{r}
+fbetween(mtcars$mpg) %>% head
+fwithin(mtcars$mpg) %>% head
+```
+
+```{r}
+all.equal(fbetween(mtcars) + fwithin(mtcars), mtcars)
+```
+
+Groupwise centering and averaging
+
+```{r}
+fbetween(mtcars$mpg, mtcars$cyl) %>% head()
+fwithin(mtcars$mpg, mtcars$cyl) %>% head()
+```
+
+The code below implements the task of demeaning 4 series by country and saving the country-id using the within-operator `W` as opposed to `fwithin` which requires all input to be passed externally like the Fast Statistical Functions.
+
+```{r}
+W(wlddev, ~ iso3c, cols = 9:12) %>% head
+```
+
+Manually with `fbetween`
+
+```{r}
+add_vars(
+  get_vars(wlddev, "iso3c"),
+  get_vars(wlddev, 9:12) %>%
+    fwithin(wlddev$iso3c) %>%
+    add_stub("W.")
+) %>% head()
+```
+
+```{r}
+microbenchmark(
+  W(wlddev, ~iso3c, cols = 9:12),
+  add_vars(
+    get_vars(wlddev, "iso3c"),
+    get_vars(wlddev, 9:12) %>%
+      fwithin(wlddev$iso3c) %>%
+      add_stub("W.")
+  )
+)
+```
+
+Drop the id's (by)
+
+```{r}
+W(wlddev, ~ iso3c, cols = 9:12, keep.by = F) %>% head
+```
+
+This replaces missing values with the group-mean: Same as `fmean(x, g, TRA = "replace_fill")`
+
+```{r}
+B(wlddev, ~ iso3c, cols = 9:12, fill = TRUE) %>% head()
+```
+
+This adds back the overall mean after subtracting out group means: Same as `fmean(x, g, TRA = "-+")`
+
+```{r}
+W(wlddev, ~ iso3c, cols = 9:12, mean = "overall.mean") %>% head()
+```
+
+```{r collapse-data-transformations}
+oldpar <- par(mfrow = c(1, 3))
+plot(iris[1:2], col = iris$Species, 
+     main = "Raw Data")
+plot(W(iris, ~ Species)[2:3], col = iris$Species, 
+     main = "Simple Centering")
+plot(W(iris, ~ Species, mean = "overall.mean")[2:3], col = iris$Species,
+     main = "Added Overall Mean")
+```
+
+```{r}
+par(oldpar)
+```
+
+Using operators in regression. When using operators in formulas, we need to remove missing values beforehand to obtain the same results as a Fixed-Effects package
+
+## Linear regression with `W` and `B`
+
+```{r}
+data <- wlddev %>% fselect(iso3c, year, PCGDP, LIFEEX) %>% 
+  na_omit()
+```
+
+classical lm() -> iso3c is a factor, creates a matrix of 200+ country dummies.
+
+
+```{r}
+coef(lm(PCGDP ~ LIFEEX + iso3c, data))[1:2]
+```
+
+Centering each variable individually
+
+```{r}
+coef(lm(W(PCGDP, iso3c) ~ W(LIFEEX, iso3c), data))
+```
+
+Centering the data
+
+```{r}
+coef(lm(
+  W.PCGDP ~ W.LIFEEX, W(data, PCGDP + LIFEEX ~ iso3c)
+))
+```
+
+Adding the overall mean back to the data only changes the intercept
+
+```{r}
+coef(lm(
+  W.PCGDP ~ W.LIFEEX, 
+  W(data, PCGDP + LIFEEX  ~ iso3c, 
+    mean = "overall.mean")))
+```
+
+Procedure suggested by Mundlak (1978) - controlling for group averages instead of demeaning
+
+```{r}
+coef(lm(PCGDP ~ LIFEEX + B(LIFEEX, iso3c), data))
+```
+
+# HD Centering and Linear Prediction
+
+When simple centering is not enough, eg if a linear model with multiple levels of fixed-effects needs to be estimated, potentially with interactions between continuous covariates. `fhdwithin` / `HDW` and `fhdbetween` / `HDB` are used, which splits the regression into a factor portion which uses `fixest::demean` and the portion with continous variables which uses `chol` or `qr`.
+
+An example of using `HDW` to manually solve a regression problem with country and time fixed effects.
+
+```{r}
+data$year <- qF(data$year, na.exclude = FALSE)
+class(data$iso3c)
+```
+
+Classical `lm()` creates a matrix of 196 country dummies and 56 year dummies
+
+```{r}
+coef(lm(PCGDP ~ LIFEEX + iso3c + year, data))[1:2]
+```
+
+Centering each variable individually
+
+```{r}
+coef(lm(HDW(PCGDP, list(iso3c, year)) ~
+          HDW(LIFEEX, list(iso3c, year)),
+        data))
+```
+
+Centering the entire data
+
+```{r}
+coef(lm(HDW.PCGDP ~ HDW.LIFEEX, HDW(data, PCGDP + LIFEEX ~ iso3c + year)))
+```
+
+Procedure suggested by Mundlak (1978) - controlling for averages instead of demeaning
+
+```{r}
+coef(lm(PCGDP ~ LIFEEX + HDB(LIFEEX, list(iso3c, year)), data))
+```
+
+We may wish to test whether including time fixed-effects in the above regression actually impacts the fit. 
+
+```{r}
+data %$% fFtest(PCGDP, year, list(LIFEEX, iso3c))
+```
+
+The test shows that the time fixed-effects (accounted for like year dummies) are jointly significant.
+
+One can also use `fhdbetween` / `HDB` and `fhdwithin` / `HDW` to project out interactions and continuous covariates.
+
+```{r}
+wlddev$year <- as.numeric(wlddev$year)
+```
+
+classical lm() -> full country-year interaction, -> 200+ country dummies, 200+ trends, year and ODA
+
+```{r}
+coef(lm(PCGDP ~ LIFEEX + iso3c * year + ODA, wlddev))[1:2]
+```
+
+Same with `HDW`
+
+```{r}
+coef(lm(HDW.PCGDP ~ HDW.LIFEEX, 
+        HDW(wlddev, PCGDP + LIFEEX ~ iso3c * year + ODA)))
+```
+
+example of a simple continuous problem
+
+```{r}
+HDW(iris[1:2], iris[3:4]) %>% head
+```
+
+
+
