@@ -1,0 +1,296 @@
+---
+title: "Advanced and Fast Statisctical Computing"
+format: gfm
+---
+
+[Source](https://www.youtube.com/watch?v=OwWT1-dSEts&t=6433s)
+
+```{r}
+library(collapse)
+library(magrittr)
+options(paged.print = FALSE)
+```
+
+```{r}
+.FAST_STAT_FUN
+```
+
+```{r}
+methods(fmean)
+```
+
+```{r}
+class(AirPassengers)
+fmean(AirPassengers)
+```
+
+```{r}
+class(EuStockMarkets)
+fmean(EuStockMarkets)
+```
+
+```{r}
+class(airquality)
+fmean(airquality)
+```
+
+```{r}
+library(microbenchmark)
+x <- rnorm(1e7)
+microbenchmark(
+  mean(x), fmean(x), fmean(x, nthreads = 4)
+)
+```
+
+```{r}
+microbenchmark(colMeans(EuStockMarkets), fmean(EuStockMarkets))
+```
+
+```{r}
+microbenchmark(sapply(mtcars, mean), fmean(mtcars))
+```
+
+```{r}
+fmean(mtcars)
+```
+
+```{r}
+microbenchmark(
+  base = sapply(GGDC10S[6:16], mean, na.rm = TRUE),
+  collapse = fmean(GGDC10S[6:16])
+)
+```
+
+Weighted mean
+
+```{r}
+w <- abs(rnorm(nrow(iris)))
+all.equal(
+  fmean(num_vars(iris), w = w),
+  sapply(num_vars(iris), weighted.mean, w = w)
+)
+microbenchmark(
+  coll = fmean(num_vars(iris), w = w),
+  base = sapply(num_vars(iris), weighted.mean, w = w)
+)
+```
+
+Missing weights are treated as 0, ie observation omitted.
+
+```{r}
+wNA <- na_insert(w, prop = 0.05)
+fmean(num_vars(iris), w = wNA)
+```
+
+Grouped statistics
+
+```{r}
+microbenchmark(
+  fmean = fmean(iris$Sepal.Length, iris$Species),
+  tapply = tapply(iris$Sepal.Length, iris$Species, mean)
+)
+```
+
+```{r}
+library(magrittr)
+microbenchmark(
+  fmean = fmean(num_vars(iris), iris$Species),
+  fgroup = iris %>% fgroup_by(Species) %>% fmean,
+  dplyr = iris %>% dplyr::group_by(Species) %>% fmean
+)
+```
+
+# Weighted group means
+
+```{r}
+fmean(num_vars(iris), iris$Species, w)
+```
+
+```{r}
+iris %>% 
+  add_vars(w) %>% 
+  fgroup_by(Species) %>% 
+  fmean
+```
+
+```{r}
+microbenchmark(
+  base = lapply(num_vars(iris), weighted.mean, w),
+  clp_w = fmean(num_vars(iris), w = w),
+  clp_g = fmean(num_vars(iris), iris$Species),
+  clp_g_w = fmean(num_vars(iris), iris$Species, w)
+)
+```
+
+Benchmark with 10M observations across 1M groups
+
+```{r}
+#| message: false
+library(data.table)
+g <- sample.int(1e6, 1e7, replace = T)
+w <- abs(rnorm(1e7))
+dt <- setkey(data.table(x, g))
+g <- GRP(g)
+
+microbenchmark(
+  clp = fmean(x, na.rm = F),
+  clp_g = fmean(x, g, use.g.names = F, na.rm = F),
+  clp_t_w = fmean(x, g, w, use.g.names = F, na.rm = F),
+  clp_t_w_th = fmean(x, g, w, use.g.names = F, na.rm = F, nthreads = 4),
+  dt = dt[, mean(x), keyby = g]
+)
+```
+
+Grouped weighted centering. These are equivalent.
+
+```{r}
+#| eval: false
+fmean(x, g, w, "-")
+TRA(x, fmean(x, g, w), "-", g)
+```
+
+
+```{r}
+microbenchmark(
+  base = iris$Sepal.Length - ave(iris$Sepal.Length, iris$Species),
+  fmean = fmean(iris$Sepal.Length, iris$Species, TRA = "-"),
+  fmean_TRA = TRA(iris$Sepal.Length, fmean(iris$Sepal.Length, iris$Species),
+                  "-", iris$Species)
+)
+```
+
+Modification in-place
+
+```{r}
+iris_cp1 <- iris
+iris_cp2 <- iris
+fmean(iris_cp1$Sepal.Length, iris_cp1$Species, TRA = "-", set = TRUE)
+setTRA(iris_cp2$Sepal.Length, fmean(iris_cp2$Sepal.Length, iris_cp2$Species),
+       "-", iris_cp2$Species)
+all_obj_equal(iris_cp1, iris_cp2)
+iris_cp1 %>% head
+```
+
+```{r}
+fmean(iris$Sepal.Length, iris$Species, TRA = "-") %>% head
+```
+
+Impute missing variables by reference
+
+```{r}
+num_vars(iris) %<>% na_insert(prop = 0.05)
+num_vars(iris) %>% head
+num_vars(iris) %>% 
+  fmedian(iris$Species, TRA = "replace_NA", set = TRUE)
+num_vars(iris) %>% head
+```
+
+Different grouped/weighted transformations at once.
+
+```{r}
+mtcars %>% 
+  ftransform(
+    A = fsum(mpg, TRA = "%"),
+    B = mpg %>% fmedian(mpg, cyl, TRA = "replace_fill"),
+    C = fmedian(mpg, list(vs, am), wt, "-"),
+    D = fmean(mpg, vs,, 1L) > fmean(mpg, am,, 1L) # 1L is "replace_fill"
+  ) %>% head
+```
+
+Row and column arithmetic
+
+```{r}
+mtcars %c/% mtcars %>% head(2)
+```
+
+Sweep median centered values
+
+```{r}
+mtcars %r-% fmean(mtcars) %>% head(3)
+```
+
+# Grouping objects
+
+Main function `GRP()`, returns a list-like object. Allows for 0 cost grouped computations
+
+```{r}
+(g <- GRP(iris, by = ~ Species))
+```
+
+```{r}
+str(g)
+```
+
+
+```{r}
+fmean(num_vars(iris), g)
+```
+
+```{r}
+ffirst(num_vars(iris), g, na.rm = F)
+```
+
+```{r}
+
+```
+
+# Efficient Inputs: Factors
+
+```{r}
+x <- na_insert(rnorm(1e7), prop = 0.01)
+g <- sample.int(1e6, 1e7, TRUE)
+system.time(gg <- GRP(g))
+```
+
+```{r}
+system.time(f <- factor(g, exclude = NULL))
+system.time(f <- qF(g, na.exclude = F))
+```
+
+```{r}
+class(f)
+```
+
+The `na.included` class indicates no missing values.
+
+```{r}
+f2 <- `class<-`(f, "factor")
+class(f2)
+```
+
+
+```{r}
+microbenchmark(
+  fmean(x, g),
+  fmean(x, gg),
+  fmean(x, gg, na.rm = FALSE),
+  fmean(x, f),
+  fmean(x, f2),
+  ffirst(x, gg, na.rm = FALSE)
+)
+```
+
+Depending on the specific caluclation, the group object can be faster.
+
+```{r}
+microbenchmark(
+  fmedian(x, gg),
+  fmedian(x, f)
+)
+```
+
+Collapse provides a `qG` object with is a "light" factor class, or quick group.
+
+```{r}
+system.time(qg <- qG(g, na.exclude = F))
+str(qg)
+```
+
+```{r}
+fmean(x, qg)
+```
+
+
+
+
+

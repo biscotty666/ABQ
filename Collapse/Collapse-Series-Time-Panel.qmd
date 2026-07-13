@@ -1,0 +1,111 @@
+---
+title: "Collapse Time Series and Panel Series"
+format: gfm
+---
+
+
+[Source](https://fastverse.org/collapse/articles/collapse_intro.html#time-series-and-panel-series)
+
+```{r}
+#| message: false
+library(collapse)
+library(magrittr)
+library(microbenchmark)
+options(paged.print = FALSE)
+```
+
+# Panel Series to Array Conversions
+
+To facilitate the exploration and access of panel data, `psmat` was created as an S3 generic to efficiently obtain matrices or 3D-arrays from panel data.
+
+```{r}
+mts <- psmat(wlddev, PCGDP ~ iso3c, ~ year)
+str(mts)
+```
+
+```{r}
+plot(log10(mts), main = paste("Log10", vlabels(wlddev$PCGDP)))
+```
+
+Passing a data frame of panel series to psmat generates a 3D array:
+
+```{r}
+psar <- psmat(wlddev, ~ iso3c, ~ year, cols = 9:12)
+str(psar)
+```
+
+```{r}
+plot(psar)
+```
+
+Plot array of Panel Series aggregated by region
+
+```{r}
+collap(wlddev, ~ region + year, cols = 9:12) %>% 
+  psmat(~ region, ~ year) %>% 
+  plot(legend = TRUE, labs = vlabels(wlddev)[9:12])
+```
+
+`psmat` can also output a list of panel series matrices, which can be used among other things to reshape the data with `unlist2d`.
+
+A list of ps-matrices
+
+```{r}
+psml <- psmat(wlddev, ~ iso3c, ~ year, 9:12, array = FALSE)
+str(psml, give.attr = F)
+```
+
+Generate a data frame from the list
+
+```{r}
+unlist2d(psml, idcols = "Variable", row.names = "Country") %>% 
+  get_vars(1:10) %>% 
+  head
+```
+
+# ACF, PACF and CCF
+
+The correlation structure of panel data can also be explored with `psacf`, `pspacf` and `psccf`. They use `fscale` to group-scale panel data by the panel-id provided, and then compute the covariance of a sequence of panel-lags (generated with `flag` discussed below) with the group-scaled level-series, dividing by the variance of the group-scaled level series. The Partial-ACF is generated from the ACF using a Yule-Walker decomposition (as in `stats::pacf`).
+
+Panel-ACF of GCP per Capita
+
+```{r}
+psacf(wlddev, PCGDP ~ iso3c, ~ year)
+```
+
+Panel-Partial-ACF
+
+```{r}
+pspacf(wlddev, PCGDP ~ iso3c, ~ year)
+```
+
+Panel- Cross-Correlation function of GDP and Life-Expectancy
+
+```{r}
+wlddev %$% psccf(PCGDP, LIFEEX, iso3c, year)
+```
+
+Multivariate Panel-auto and cross-correlation function of 3 variables:
+
+```{r}
+psacf(wlddev, PCGDP + LIFEEX + ODA ~ iso3c, ~ year)
+```
+
+# Fast Lags and Leads
+
+`flag`, `L`, `F`
+
+1 lag
+
+```{r}
+L(AirPassengers)
+```
+
+
+
+
+
+
+
+
+
