@@ -34,8 +34,8 @@
               chromium
               pandoc
               rstudio
+              texliveMedium
               ;
-            inherit (pkgs.texlive.combined) scheme-medium;
             inherit (pkgs.rPackages)
               palmerpenguins
               reshape2
