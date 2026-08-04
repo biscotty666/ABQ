@@ -26,6 +26,9 @@
       in
       {
         devShells.default = pkgs.mkShell {
+          buildInputs = [
+            pkgs.fontconfig
+          ];
           packages = builtins.attrValues {
             inherit (myPackages) patchedQuarto;
             inherit (pkgs)
@@ -41,6 +44,7 @@
               reshape2
               nnet
               foreign
+              FastUtils
               GGally
               GWmodel
               bestNormalize
@@ -72,6 +76,7 @@
               rcompanion
               # rnaturalearth
               # rnaturalearthdata
+              rgeoda
               # roxygen2
               rstatix
               rvest
