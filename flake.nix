@@ -83,6 +83,7 @@
               scales
               segregation
               sf
+              sfdep
               spatialreg
               # spData
               spdep
