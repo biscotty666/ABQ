@@ -341,6 +341,9 @@ abq_data_geom <- st_geometry(abq_data)
 abq_data <- st_drop_geometry(abq_data) %>% qDF
 ```
 
+# Analysis of Variance
+
+
 ## Visualizing the data
 
 I'll start by plotting the raw data. I want to construct boxplots, histograms and qq-plots for all the variables, and display them side-by-side with `patchwork`. This is where I really appreciate the functional programming aspects of __R__. I'll first create a histogram function. Note the `.data[[var]]` syntax, which is necessary to pass variables to `aes()` when using `aes()` _within_ a function. Then I will use `map()` multiple times to produce the plots with `zeallot`'s assignment operator `%<-%`.
@@ -395,7 +398,68 @@ map(
 )
 ```
 
-# Analysis of Variance
+
+Now, let's look at the variation of variables across districts. For that, I will use boxplots and ridge plots.
+
+```{r}
+plot_dist <- function(df, var) {
+  df %>%
+    ggboxplot("district", var, fill = "district") +
+    geom_point(position = position_jitter(width = 0.1)) +
+    scale_fill_viridis_d() +
+    theme(
+      axis.text.x = element_text(
+        angle = 45, vjust = .5, hjust = .5)) +
+    guides(fill = "none") +
+    labs(caption = caption)
+}
+
+c(
+  pHouse.Value.Med, pGini,
+  pRent.Med, pAge.Med, pIncome.Med, pForeign.Born.Pct,
+  pHisp.Pct, pCollege.Pct, pPopulation.Density,
+  pVacant.Pct, pRenter.Occupied.Pct, pHousing.Density
+) %<-%
+  map(num_var_names, \(x) abq_data %>% plot_dist(x))
+pHouse.Value.Med; pGini; pIncome.Med; pHisp.Pct; pCollege.Pct
+```
+
+
+```{r}
+#| message: false
+#| warning: false
+plot_dist_ridge <- function(df, var) {
+  ggplot(df, aes(
+    x = .data[[var]], y = district,
+    fill = factor(stat(quantile))
+  )) +
+    stat_density_ridges(
+      geom = "density_ridges_gradient", calc_ecdf = TRUE,
+      quantiles = 4, quantile_lines = TRUE, alpha = 0.7,
+      jittered_points = TRUE, position = "points_sina"
+    ) +
+    scale_fill_viridis_d(name = "Quartiles") +
+    theme(axis.title.x = element_blank())
+}
+
+c(
+  pHouse.Value.Med, pGini,
+  pRent.Med, pAge.Med, pIncome.Med, pForeign.Born.Pct,
+  pHisp.Pct, pCollege.Pct, pPopulation.Density,
+  pVacant.Pct, pRenter.Occupied.Pct, pHousing.Density
+) %<-%
+  map(
+    num_var_names,
+    \(x) abq_data %>%
+      plot_dist_ridge(x) +
+      labs(title = x)
+  )
+pHouse.Value.Med; pGini; pIncome.Med; pHisp.Pct; pCollege.Pct
+```
+
+These plots confirm some of the observations based on the maps. They also reveal how different the distributions are shaped. In most variables, district 3 has a rather compact distribution, which is closer to normal than any other district. On the other hand, the distributions of the fourth district are generally very wide and not at all normal. The sixth and eighth district show the same tendancy for some of the variables.
+
+The apparent non-homogeneity of variance across the districts will be another issue to address when performing the analysis of variance.
 
 To perform the standard analysis of variance, data is expected to be normally distributed. Further, there should be equality of variance across districts. As the above plots show, only a couple of the variables appear to be normally distributed.
 
@@ -641,180 +705,4 @@ map(
     as_tibble
 )
 ```
-
-# Spatial autocorrelation
-
-```{r}
-abq_data <- st_sf(abq_data, geometry = abq_data_geom)
-nb <- poly2nb(abq_data, queen = F, snap = 25)
-nbw <- nb2listw(nb, style = "W", zero.policy = T)
-
-map(vars_list,
-    \(x) moran.test(x, nbw, alternative = "two.sided") %>% tidy) %>% 
-  unlist2d
-```
-
-```{r}
-map(vars_list, \(x) moran.plot(x, nbw))
-```
-
-
-
-# Here
-
-```{r}
-make_cuts <- function(var) {
-  quantiles <- classIntervals(var, 5, style = "quantile")
-  cut(
-    var, quantiles$brks,
-    include.lowest = TRUE, dig.lab = 6
-  ) %>%
-    str_replace_all(",", " - ") %>%
-    str_replace_all("[\\(\\]\\[]", "")
-}
-
-abq_data$quantiles <- make_cuts(abq_data$Income.Med)
-tmp <- st_drop_geometry(abq_data) %>% fselect("Income.Med") %>% pull
-make_cuts(tmp)
-
-cuts <- map(num_var_names,
-    \(x) make_cuts(st_drop_geometry(abq_data)[[x]]))
-
-map2(
-  cuts, num_var_names,
-  \(cut, lab) abq_data %>%
-    fselect(num_var_names) %>%
-    ggplot() +
-    annotation_map_tile(
-      type = "osm",
-      zoomin = -1, cachedir = "~/.cache/maps/"
-    ) +
-    geom_sf(aes(fill = cut), alpha = 0.7) +
-    geom_sf(data = council_dists, aes(color = district), linewidth = 1, show.legend = F) +
-    scale_fill_viridis_d() +
-    scale_color_viridis_d() +
-    labs(fill = lab) +
-    theme_void()
-)
-```
-
-
-```{r}
-get_var <- function(df, var) {
-  st_drop_geometry(df)[var] %>% pull 
-    
-}
-
-localmoran(abq_data[["Income.Med"]], nbw, alternative = "greater")
-lmoran <- localmoran(get_var(abq_data, "Income.Med"), nbw, alternative = "greater")
-lmorans <- map(num_var_names,
-               \(x) localmoran(get_var(abq_data, x), nbw, alternative = "greater"))
-```
-
-```{r}
-abq_data$lmI <- lmoran[, "Ii"] # local Moran's I
-abq_data$lmZ <- lmoran[, "Z.Ii"] # z-scores
-abq_data$lmp <- lmoran[, "Pr(z > E(Ii))"]
-```
-
-
-```{r}
-library(tmap)
-
-p1 <- tm_shape(abq_data_nona) +
-  tm_polygons(col = "vbl", title = "vbl", style = "quantile") +
-  tm_layout(legend.outside = TRUE)
-
-p2 <- tm_shape(abq_data_nona) +
-  tm_polygons(col = "lmI", title = "Local Moran's I",
-              style = "quantile") +
-  tm_layout(legend.outside = TRUE)
-
-p3 <- tm_shape(abq_data_nona) +
-  tm_polygons(col = "lmZ", title = "Z-score",
-              breaks = c(-Inf, 1.65, Inf)) +
-  tm_layout(legend.outside = TRUE)
-
-p4 <- tm_shape(abq_data_nona) +
-  tm_polygons(col = "lmp", title = "p-value",
-              breaks = c(-Inf, 0.05, Inf)) +
-  tm_layout(legend.outside = TRUE)
-
-tmap_arrange(p1, p2, p3, p4)
-```
-
-```{r}
-tmap5 <- tm_shape(abq_data_nona) + 
-  tm_polygons(col = "lmZ",
-              title = "Local Moran's I", 
-              style = "fixed",
-              breaks = c(-Inf, -1.96, 1.96, Inf),
-              labels = c("Negative SAC", "No SAC", "Positive SAC"),
-              palette =  c("blue", "white", "red")) +
-  tm_layout(legend.outside = TRUE)
-tmap5
-```
-
-## Clusters
-
-```{r}
-lmoran <- localmoran(abq_data_nona$vbl, nbw, alternative = "two.sided")
-head(lmoran)
-```
-
-```{r}
-abq_data_nona$lmp <- lmoran[, 5]
-mp <- moran.plot(as.vector(scale(abq_data_nona$vbl)), nbw)
-```
-
-```{r}
-abq_data_nona$quadrant <- NA
-abq_data_nona[(mp$x >= 0 & mp$wx >= 0) & (abq_data_nona$lmp <= 0.05), "quadrant"] <- 1
-abq_data_nona[(mp$x <= 0 & mp$wx <= 0) & (abq_data_nona$lmp <= 0.05), "quadrant"] <- 2
-abq_data_nona[(mp$x >= 0 & mp$wx <= 0) & (abq_data_nona$lmp <= 0.05), "quadrant"] <- 3
-abq_data_nona[(mp$x <= 0 & mp$wx >= 0) & (abq_data_nona$lmp <= 0.05), "quadrant"] <- 4
-abq_data_nona[(abq_data_nona$lmp > 0.05), "quadrant"] <- 5
-```
-
-```{r}
-tm_shape(abq_data_nona) +
-  tm_fill(
-    col = "quadrant", title = "",
-    breaks = c(1, 2, 3, 4, 5, 6),
-    palette = c("red", "blue", "lightpink", "skyblue2", "white"),
-    labels = c(
-      "High-High", "Low-Low", "High-Low",
-      "Low-High", "Non-significant"
-    )
-  ) +
-  tm_legend(text.size = 1) + tm_borders(alpha = 0.5) +
-  tm_layout(frame = FALSE, title = "Clusters") +
-  tm_layout(legend.outside = TRUE)
-```
-
-
-
-
-# Save data
-
-```{r}
-data_sets <- c(
-  "bern_data", "abq_data", "abq_data_blom"
-)
-
-walk2(
-  map(data_sets, \(x) get(x)),
-  data_sets,
-  \(df, level) st_write(df, "data/district_variance.gpkg",
-    layer = level, append = F
-  )
-)
-abq_data_blom %<>%
-  st_cast("MULTIPOLYGON")
-```
-
-
-
-
-
 

@@ -1,0 +1,413 @@
+---
+title: "District Variance"
+format: gfm
+---
+
+
+```{r}
+#| message: false
+options(paged.print = FALSE,
+        tigris_use_cache = TRUE)
+libraries <- list(
+  "sf", "collapse", "ggplot2", "magrittr", "dplyr",
+  "zeallot", "purrr", "patchwork"
+)
+invisible(lapply(libraries, library, character.only = TRUE))
+
+# microbenchmark <- microbenchmark::microbenchmark
+glue <- glue::glue
+# annotation_map_tile <- ggspatial::annotation_map_tile
+ggboxplot <- ggpubr::ggboxplot
+ggqqplot <- ggpubr::ggqqplot
+shapiro_test <- rstatix::shapiro_test
+blom <- rcompanion::blom
+# tidy <- broom::tidy
+welch_anova_test <- rstatix::welch_anova_test
+stat_density_ridges <- ggridges::stat_density_ridges
+# rownames_to_column <- tibble::rownames_to_column
+# separate <- tidyr::separate
+# games_howell_test <- rstatix::games_howell_test
+# rescale <- scales::rescale
+# classIntervals <- classInt::classIntervals
+# str_replace_all <- stringr::str_replace_all
+# set_units <- units::set_units
+# iif <- kit::iif
+# st_remove_holes <- nngeo::st_remove_holes
+
+year <- 2024
+crs <- 6528
+caption <- glue("Source: census.gov, acs5, {year}")
+```
+
+# Analysis of Variance
+
+
+## Visualizing the data
+
+I'll start by plotting the raw data. I want to construct boxplots, histograms and qq-plots for all the variables, and display them side-by-side with `patchwork`. This is where I really appreciate the functional programming aspects of __R__. I'll first create a histogram function. Note the `.data[[var]]` syntax, which is necessary to pass variables to `aes()` when using `aes()` _within_ a function. Then I will use `map()` multiple times to produce the plots with `zeallot`'s assignment operator `%<-%`.
+
+`num_vars` is a useful function which efficiently selects the numeric variables from a data frame, or any similar object. The `return` argument makes it very flexible. In this case, rather than the data, I'm just grabbing the variable names.
+
+```{r}
+abq_data <- st_read("data/district_variance.gpkg", 
+                    layer = "abq_data")
+to_sf <- function(df, geometry = abq_data_geom) {
+  st_sf(df, geometry = geometry)
+}
+to_df <- function(df) {
+  st_drop_geometry(df) %>% qDF
+}
+abq_data_geom <- st_geometry(abq_data)
+num_var_names <- num_vars(abq_data, return = "names")
+
+plot_dist <- function(df, var) {
+  df %>%
+    ggboxplot("district", var, fill = "district") +
+    geom_point(position = position_jitter(width = 0.1)) +
+    theme(axis.text.x = element_text(angle = 45, vjust = .5)) +
+    guides(fill = "none") +
+    labs(caption = caption)
+}
+
+c(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13) %<-%
+  map(num_var_names, \(x) abq_data %>% plot_dist(x))
+
+(p1 + p2)
+(p3 + p4)
+(p5 + p6)
+(p7 + p8)
+(p9 + p10)
+(p11 + p12)
+p13
+```
+
+```{r}
+plot_hist <- function(df, var) {
+  df %>%
+    ggplot(aes(.data[[var]])) +
+    geom_histogram(aes(y = after_stat(density)),
+      fill = "lightgray", col = "black", bins = 20
+    ) +
+    geom_line(stat = "density", adjust = 2, color = "blue") +
+    labs(caption = caption)
+}
+
+hists <- map(num_var_names, \(x) abq_data %>% plot_hist(x))
+
+vars_list <- get_vars(to_df(abq_data), num_var_names) %>% as.list
+
+qqs <- map(vars_list, ggqqplot)
+
+map(
+  1:length(hists),
+  \(x) hists[[x]] + qqs[[x]]
+)
+```
+
+Now, let's look at the variation of variables across districts. For that, I will use boxplots and ridge plots.
+
+```{r}
+plot_dist <- function(df, var) {
+  df %>%
+    ggboxplot("district", var, fill = "district") +
+    geom_point(position = position_jitter(width = 0.1)) +
+    scale_fill_viridis_d() +
+    theme(
+      axis.text.x = element_text(
+        angle = 45, vjust = .5, hjust = .5)) +
+    guides(fill = "none") +
+    labs(caption = caption)
+}
+
+c(
+  pHouse.Value.Med, pGini,
+  pRent.Med, pAge.Med, pIncome.Med, pForeign.Born.Pct,
+  pHisp.Pct, pCollege.Pct, pPopulation.Density,
+  pVacant.Pct, pRenter.Occupied.Pct, pHousing.Density
+) %<-%
+  map(num_var_names, \(x) abq_data %>% plot_dist(x))
+pHouse.Value.Med; pGini; pIncome.Med; pHisp.Pct; pCollege.Pct
+```
+
+
+```{r}
+#| message: false
+#| warning: false
+plot_dist_ridge <- function(df, var) {
+  ggplot(df, aes(
+    x = .data[[var]], y = district,
+    fill = factor(stat(quantile))
+  )) +
+    stat_density_ridges(
+      geom = "density_ridges_gradient", calc_ecdf = TRUE,
+      quantiles = 4, quantile_lines = TRUE, alpha = 0.7,
+      jittered_points = TRUE, position = "points_sina"
+    ) +
+    scale_fill_viridis_d(name = "Quartiles") +
+    theme(axis.title.x = element_blank())
+}
+
+c(
+  pHouse.Value.Med, pGini,
+  pRent.Med, pAge.Med, pIncome.Med, pForeign.Born.Pct,
+  pHisp.Pct, pCollege.Pct, pPopulation.Density,
+  pVacant.Pct, pRenter.Occupied.Pct, pHousing.Density
+) %<-%
+  map(
+    num_var_names,
+    \(x) abq_data %>%
+      plot_dist_ridge(x) +
+      labs(title = x)
+  )
+pHouse.Value.Med; pGini; pIncome.Med; pHisp.Pct; pCollege.Pct
+```
+
+These plots confirm some of the observations based on the maps. They also reveal how different the distributions are shaped. In most variables, district 3 has a rather compact distribution, which is closer to normal than any other district. On the other hand, the distributions of the fourth district are generally very wide and not at all normal. The sixth and eighth district show the same tendancy for some of the variables.
+
+The apparent non-homogeneity of variance across the districts will be another issue to address when performing the analysis of variance.
+
+To perform the standard analysis of variance, data is expected to be normally distributed. Further, there should be equality of variance across districts. As the above plots show, only a couple of the variables appear to be normally distributed.
+
+## Data Normalization
+
+With a couple of exceptions, visualization showed that none of these variables appear to be normally distributed. Formally, we can use the Shapiro-Wilk test for normal distribution to be sure.
+
+The Shapiro-Wilk test can be used to evaluate statistically whether a variable is normally distributed. The null hypothesis in this test is that the data _is_ normally distributed. $p$-values less than 0.05 indicate that the null hypothesis should be rejected, implying that the data are not normally distributed. I'll start by running a `shapiro_test` on all of the variables, filtering for $p$-values greater than 0.05, which are the normally distributed variables.
+
+The `unlist2d` function collapses a list of data frames to a single data frame.
+
+```{r}
+map(vars_list, shapiro_test) %>% 
+  unlist2d %>% 
+  fmutate(
+    variable = num_var_names,
+    sig = iif(p.value <= .05, "Yes", "No")
+  ) %>%
+  fsubset(sig == "No") %>%
+  fselect(-1)
+```
+
+As expected, only two of the variables are normally distributed.
+
+### Transformations
+
+I will test some different transformations to see if I can coerce the data to normalcy. I will create a function to do so and filter the data as above. Happily, in R, functions are first-class data types, allowing functions to be passed as arguments to functions. In fact, this custom function highlights the richness of R's functional programming capabilities, using the built-in `lapply()` and `purrr`'s `map()`. I will write a generic function, and partially apply the first two arguments with `partial` to create a new function specific to my data.
+
+
+```{r}
+run_shapiro <- function(df, vars, f) {
+  data <- gv(df, vars) %>% as.list() %>% lapply(f)
+  map(data, shapiro_test) %>%
+    unlist2d %>%
+    fmutate(
+      variable = vars,
+      sig = iif(p.value <= .05, "Yes", "No")
+    ) %>%
+    fselect(-1) %>%
+    fsubset(sig == "No")
+}
+
+run_shapiro_abq <- partial(run_shapiro, abq_data, num_var_names)
+```
+
+
+I'll try a few common transformations such as square root, cube root, and log transformations. I'll use a modified log transformation, since there are many 0 values.
+
+```{r}
+cube_root <- function(x) {
+  sign(x) * abs(x)^(1/3)
+}
+ihs_transform <- function(x) {
+  log(x + (x^2 + 1)^0.5)
+}
+
+map(list(sqrt, cube_root, ihs_transform), run_shapiro_abq)
+```
+
+Only a few variables can be normalized with these techniques. Now I'll try an inverse normal transformation. This transformation is based on ranking, and is able to normalize highly skewed distributions. The downside of this transformation is that the "distance" between each observation is lost, obscuring information about the variability within the variable. The `blom()` function which performs the transformation defaults to a "general" method. 
+
+```{r}
+xf_blom <- partial(blom, method = "blom")
+run_shapiro_abq(xf_blom)
+```
+
+All of the variables are normalizable with this transformation, with the exception of vacancy percentage, so I'll remove it, and create a frame with the transformed data. Again, this is 78 times faster than with `dplyr`.
+
+```{r}
+abq_data %<>% fselect(-Vacant.Pct)
+num_var_names <- num_vars(abq_data, return = "names")
+abq_data_blom <- fmutate(abq_data, across(num_var_names, xf_blom))
+```
+
+```{r}
+dmutate <- dplyr::mutate
+dacross <- dplyr::across
+dall_of <- dplyr::all_of
+microbenchmark(
+  collapse = abq_data %>%
+    fmutate(across(num_var_names, xf_blom)),
+  dyplr = abq_data %>%
+    dmutate(dacross(dall_of(num_var_names), ~ xf_blom(.x)))
+)
+```
+
+## Equality of variance (Bartlett's test)
+
+Now that I have normally distributed variables, I need to address the second assumption of ANOVA tests, which is equality of variance among the districts. [Bartlett's test](https://en.wikipedia.org/wiki/Bartlett's_test) can be used for that purpose, but before running the tests, we can visualize the distributions with ridge plots.
+
+```{r}
+#| message: false
+#| warning: false
+plot_dist_ridge <- function(df, var) {
+  ggplot(df, aes(
+    x = .data[[var]], y = district,
+    fill = factor(stat(quantile))
+  )) +
+    stat_density_ridges(
+      geom = "density_ridges_gradient", calc_ecdf = TRUE,
+      quantiles = 4, quantile_lines = TRUE, alpha = 0.7,
+      jittered_points = TRUE, position = "points_sina"
+    ) +
+    scale_fill_viridis_d(name = "Quartiles") +
+    theme(axis.title.x = element_blank())
+}
+
+map(num_var_names, 
+    \(x) abq_data_blom %>% 
+      plot_dist_ridge(x) +
+      labs(title = x))
+```
+
+The null hypothesis in Bartlett's test is that all population variances are equal among the districts, while the alternative hypothesis is that at least two are different.
+
+```{r}
+# var_vals <- map(var_names, \(x) pull(abq_data_elf, x))
+vars_list <- get_vars(abq_data_blom, num_var_names) %>% as.list
+btests <- map2(
+  num_var_names,
+  vars_list,
+  \(x, y) list(x, bartlett.test(y ~ district, abq_data_blom))
+)
+data.frame(
+  variable = unlist(map(1:length(btests), \(x) btests[[x]][[1]])),
+  statistic = unlist(map(1:length(btests), \(x) btests[[x]][[2]]$statistic)),
+  p_value = unlist(map(1:length(btests), \(x) btests[[x]][[2]]$p.value %>% round(., 3)))
+) %>% fsubset(p_value > .05)
+```
+
+Median house value, median income, percent Hispanic, and percentage of college graduates do not show homogeneity of variance, and so I will remove them for purposes of the classic ANOVA test.
+
+```{r}
+var_names_aov <- num_var_names[c(2:4, 9:11)]
+var_vals_aov <- get_vars(abq_data_blom, var_names_aov) %>% as.list
+```
+
+## ANOVA
+
+```{r}
+aov_tests <- map(
+  var_names_aov,
+  \(x) list(x, aov(as.formula(glue("{x} ~ district")),
+    data = abq_data_blom)
+  )
+)
+
+unlist2d_nid <- partial(unlist2d, idcols = FALSE)
+
+map2(
+  1:length(aov_tests), var_names_aov,
+  \(x, y) data.frame(
+    variable = y,
+    statistic = tidy(aov_tests[[x]][[2]])$statistic[1],
+    p.value = tidy(aov_tests[[x]][[2]])$p.value[1]
+  )
+) %>% 
+  unlist2d_nid
+```
+
+## Tukey's
+
+```{r}
+results_tky <- map(
+  aov_tests,
+  \(x) TukeyHSD(x[[2]])$district %>%
+    as.data.frame %>%
+    fsubset(`p adj` <= .05) %>%
+    fmutate(variable = x[[1]]) %>%
+    tibble::rownames_to_column("districts")
+) %>%
+  unlist2d(idcols = FALSE) %>%
+  tidyr::separate(districts, c("District.1", "District.2"), sep = "-")
+
+dist_names <- 
+  sort(funique(c(results_tky$District.1, results_tky$District.2)))
+var_names_tky <- funique(results_tky$variable)
+
+# results_tky_dist <- map(
+#   dist_names,
+#   \(x) results_tky %>%
+#     fsubset(District.1 == x | District.2 == x) %>%
+#     fmutate(
+#       district = x,
+#       compare = if_else(District.1 == x, District.2, District.1),
+#       .before = variable
+#     ) %>% 
+#     gv(-c(1:2)) %>% 
+#     roworder(district, compare)
+# )
+```
+
+```{r}
+map(
+  dist_names,
+  \(x) results_tky %>%
+    fsubset(District.1 == x | District.2 == x) %>%
+    fmutate(
+      district = x,
+      compare = iif(District.1 == x, District.2, District.1)
+    ) %>% 
+    fselect(district, variable, compare, diff, `p adj`) %>%
+    roworder(district, variable) %>% as_tibble
+)
+```
+
+
+## Welch's tests
+
+
+```{r}
+map(
+  num_var_names,
+  \(x) welch_anova_test(as.formula(glue("{x} ~ district")), data = abq_data_blom)
+  ) %>% 
+  unlist2d_nid %>% gv(-7) %>% as_tibble
+```
+
+```{r}
+results_gh <- map(
+  num_var_names,
+  \(x) games_howell_test(
+    abq_data_blom,
+    as.formula(glue("{x} ~ district"))
+  ) %>%
+    fsubset(p.adj.signif %!=% "ns") %>%
+    fselect(group1, .y., group2, estimate, p.adj, p.adj.signif) %>%
+    frename(.y. = "variable", group1 = "district", group2 = "compare")
+) %>% 
+  unlist2d_nid() %>% 
+  roworder(district, variable)
+```
+
+```{r}
+map(
+  dist_names,
+  \(x) results_gh %>%
+    fsubset(district == x | compare == x) %>%
+    fmutate(
+      district = x,
+      compare = iif(district == x, compare, district)
+    ) %>% 
+    as_tibble
+)
+```
+
