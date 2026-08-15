@@ -53,6 +53,7 @@
               corrr
               collapse
               crimedata
+              microbenchmark
               crimedatasets
               crsuggest
               geojsonsf
