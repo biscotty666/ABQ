@@ -1,11 +1,16 @@
 ---
-title: "Demographic and Economic Variance in Albuquerque"
+title: "Demographic and Economic Variance in Albuquerque Part 1"
 subtitle: "Rapid wrangling with the collapse package"
 format: 
   html:
     toc: true
   gfm:
     toc: true
+execute:
+  cache: true
+theme: 
+  light: cosmo
+  dark: darkly
 ---
 
 # Introduction
@@ -280,7 +285,7 @@ abq_data <- bern_data %>%
 
 I want to create some new variables from the raw data. First, I will turn the raw poverty numbers into a percentage of each tract's population. I'll also create housing and population density variables based on tract area, and vacancy and renter occupied variables that are a percentage of available housing units in each tract.
 
-`ftransformv` takes a vector of column identifiers, in this case column names, and applies a function to them, in this case an anonymous function, using the `FUN` argument. `ftransform` is similar to `fmutate`, although it has some different rules, such as the variables being non-recursive. I'm also taking advantage of some quick column arithmetic. `%c/%` is shorthand for column division. `collapse` provides a range of such functions for row and column math, eg. `%c*%`. Note also that `ftransform` allows you to remove colums easily with the syntax `variable = NULL`. 
+`ftransformv` takes a vector of column identifiers, in this case column names, and applies a function to them, in this case an anonymous function, using the `FUN` argument. `ftransform` is similar to `fmutate`, although it has some different rules, such as the variables being non-recursive. I'm also taking advantage of some quick column arithmetic. `%c/%` is shorthand for column division. `collapse` provides a range of such functions for row and column math, eg. `%c*%`. Note also that `ftransform` allows you to remove columns easily with the syntax `variable = NULL`. 
 
 Finally, I will use `st_cast` to ensure consistent geometries. After intersection operation, there are likely to be a mix of POLYGONs and MULTIPOLYGONs, which will cause trouble down the line for the spatial analyses.
 
@@ -345,8 +350,7 @@ The split data now contains new areas with a population of 0. As a result of the
 
 ```{r}
 abq_data %<>% 
-  fsubset(area_pct > .01) %>% 
-  ftransform(GEOID = NULL, Population = NULL, area_pct = NULL)
+  fsubset(area_pct > .01)
 qsu(abq_data)
 ```
 
