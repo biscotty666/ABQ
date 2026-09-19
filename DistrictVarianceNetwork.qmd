@@ -1,0 +1,181 @@
+---
+title: "DistrictVarianceNetwork"
+format: html
+---
+
+```{r}
+libraries <- list(
+  "osmdata", "collapse", "ggplot2", "magrittr", "sf",
+  "zeallot", "purrr", "sfnetworks", "igraph", "dplyr",
+  "tidygraph"
+)
+invisible(lapply(libraries, library, character.only = TRUE))
+# conflicted::conflict_prefer("%<-%", "zeallot")
+
+ms_points <- rmapshaper::ms_points
+```
+
+```{r}
+set_overpass_url("https://overpass-api.de/api/interpreter")
+# set_overpass_url("https://overpass.private.coffee/api/interpreter")
+```
+
+```{r}
+abq_bb <- getbb("Albuquerque")
+```
+
+```{r}
+#| eval: false
+abq_major_roads_dat <- abq_bb %>%
+  opq() %>%
+  add_osm_feature(
+    key = "highway",
+    value = c("motorway", "primary", "secondary")
+  ) %>% osmdata_sf
+```
+
+
+```{r}
+abq_major_roads_data <- st_read("data/roads.osm", layer = "lines")
+```
+
+
+```{r}
+crs <- 6528
+abq_roads_net <- as_sfnetwork(abq_major_roads_data, 
+                              compute_length = T, directed = F) %>% 
+  activate("edges") %>% 
+  select(c(1:5, 14)) %>%
+  filter(!edge_is_multiple()) %>%
+  convert(to_spatial_smooth) %>% 
+  st_transform(crs)
+```
+
+```{r}
+library(ggraph)
+ggraph(abq_roads_net) +
+  geom_edge_link(aes(color = highway)) +
+  geom_node_point()
+```
+
+```{r}
+my_map <- get_stamenmap(bbox, zoom = 12, maptype = "toner-lite")
+```
+
+
+```{r}
+
+street_plot <- ggplot() +
+  geom_sf(
+    data = activate(abq_roads_net, "edges"),
+    inherit.aes = F,
+    color = "black",
+    size = 0.2
+  )
+street_plot
+```
+
+
+```{r}
+#| eval: false
+abq_school <- abq_bb %>% 
+  opq() %>% 
+  add_osm_feature(
+    key = "amenity",
+    value = c("college", "school", "kindergarten", "university")
+  ) %>% osmdata_sf
+abq_health <- abq_bb %>% 
+  opq() %>% 
+  add_osm_feature(
+    key = "amenity",
+    value = c("dentist", "doctors", "hospital", "nursing_home")
+  ) %>% osmdata_sf
+abq_public <- abq_bb %>% 
+  opq() %>% 
+  add_osm_feature(
+    key = "amenity",
+    value = c("community_centre", "courthouse", "fire_station", "university",
+              "library", "police", "post_office", "townhall")
+  ) %>% osmdata_sf
+
+abq_food <- abq_bb %>% 
+  opq() %>% 
+  add_osm_feature(
+    key = "shop",
+    value = c("convenience", "food", "greengrocer", "health_food",
+              "general", "supermarket")
+  ) %>% osmdata_sf
+abq_discount <- abq_bb %>% 
+  opq() %>% 
+  add_osm_feature(
+    key = "shop",
+    value = c("charity", "second_hand", "variety_store")
+  ) %>% osmdata_sf
+
+walk2(
+  list(abq_school, abq_health, abq_public,
+       abq_food, abq_discount),
+  c("data/abq_school", "data/abq_health", "data/abq_public",
+       "data/abq_food", "data/abq_discount"),
+  \(x, y) saveRDS(x, y)
+)
+```
+
+```{r}
+zeallot::`%<-%`(
+  c(abq_school, abq_health, abq_public,
+       abq_food, abq_discount),
+  map(c("data/abq_school", "data/abq_health", "data/abq_public",
+      "data/abq_food", "data/abq_discount"), readRDS))
+```
+
+```{r}
+zeallot::`%<-%`(
+  c(abq_public_pts, abq_health_pts, abq_school_pts,
+    abq_food_pts, abq_discount_pts),
+  map(list(abq_public, abq_health, abq_school, abq_food, abq_discount),
+      \(x) ms_points(x$osm_polygons)))
+```
+
+
+```{r}
+
+abq_public_pts <- fselect(abq_public_pts, amenity, name)
+abq_health_pts %<>% fselect(amenity, name)
+names(abq_roads_net %>% activate("nodes"))
+tmp <- abq_roads_net %>% 
+  st_network_blend(abq_public_pts)
+```
+
+```{r}
+library(tidygraph)
+tmp <- abq_roads_net %>% 
+  # st_network_blend(abq_public_pts) %>% 
+  st_network_blend(abq_health_pts) %>% 
+  st_network_blend(abq_school_pts)
+abq_roads_net %>% 
+  st_network_blend(abq_public_pts) %>% 
+  convert(to_spatial_subdivision)
+abq_roads_net %<>% st_set_crs(4326)
+tmp <- abq_roads_net %>% 
+  bind_spatial_nodes(abq_health_pts)
+tmp %>%
+  activate("nodes") %>% st_as_sf
+  mutate(name = coalesce(name.x, name.y))
+st_crs(abq_health_pts)
+tmp %<>% activate("nodes") %>% st_as_sf
+tmp$amenity %>% funique()
+tmp %>% 
+  activate("nodes") %>% 
+  filter(amenity == "hospital")
+```
+
+```{r}
+net %>%
+ activate("edges") %>%
+ mutate(weight = edge_length()) %>%
+ morph(to_spatial_shortest_paths, from = 1, to = 10) %>%
+ mutate(in_paths = TRUE) %>%
+ unmorph()
+```
+
