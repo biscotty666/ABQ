@@ -1,10 +1,15 @@
 ---
 title: "Demographic and Economic Variance in Albuquerque Pt 2"
+subtitle: "Visualization and Spatial Autocorrelation"
 format: 
   html:
     toc: true
   gfm: default
-theme: darkly
+theme: 
+  light: cosmo
+  dark: darkly
+execute:
+  cache: true
 ---
 
 # Introduction
@@ -48,7 +53,8 @@ year <- 2024
 crs <- 6528
 caption <- glue("Source: census.gov, acs5, {year}")
 
-abq_data <- st_read("data/district_variance.gpkg", layer = "abq_data")
+abq_data <- st_read("data/district_variance.gpkg", layer = "abq_data") %>% 
+  ftransform(GEOID = NULL, Population = NULL, area_pct = NULL)
 council_dists <- st_read("data/district_variance.gpkg", 
                          layer = "council_dists")
 ```
@@ -460,6 +466,7 @@ lg_tables <-
 names(lg_tables) <- var_names
 table_gt <- function(table) table %>% qDF %>% rownames_to_column("district") %>% gt
 table_gt(lg_tables$Hisp.Pct)
+gt::gtsave(table_gt(lg_tables$Hisp.Pct), "data/Hisp_tbl.png")
 ```
 
 With the exceptions of district 6, and to a lesser extent district 9, most Albuquerque districts show significant racial clustering.  We can compare this to the local Moran results.
@@ -470,6 +477,7 @@ lm_tables <-
         add_vars(districts) %>% table %>% t)
 names(lm_tables) <- var_names
 table_gt(lm_tables$Hisp.Pct)
+gt::gtsave(table_gt(lm_tables$Hisp.Pct), "data/Hisp_tbl_2.png")
 ```
 
 Moran's test does not identify as many significant areas, but still all areas of District 8, and all but one of District 3 show significant racial clustering. In any case, this is a picture of a highly segregated city.
@@ -509,5 +517,20 @@ The results are similar. In this case, contiguity reveals more areas of interest
 # Conclusion
 
 Visualizing the distribution and correlation of the chosen variables allowed us to see how they are spread geographically, and identified many relationships, some expected, some not. Through spatial autocorrelation we were able to identify the areas of the city where particularly high or low values of the variables are situated. Both through visual mapping and tables, we were able to see the differences across districts, and have gained a number of insights regarding the variance between districts even before doing formal ANOVA tests. This will be the subject of the next article. As seen at the beginning, few if any of the variables are normally distributed, so the testing will not be straight-forward.
+
+```{r}
+var_maps <- map2(seq_len(length(lm_plots)), var_names,
+    \(x, y) vmaps[[x]] + lg_plots[[x]] + 
+      plot_annotation(title = glue("Albuquerque, NM - {y} - SA")))
+
+
+```
+```{r}
+purrr::walk2(
+  var_names, seq_len(length(var_names)),
+  \(x, y) ggsave(paste0("images/", x, ".png"), var_maps[[y]])
+)
+```
+
 
 
