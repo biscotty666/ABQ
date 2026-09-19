@@ -22,6 +22,27 @@
                 --replace-fail "syntax-highlighting" "highlight-style"
             '';
           });
+          sfnetworks = pkgs.rPackages.buildRPackage {
+            name = "sfnetworks";
+            src = pkgs.fetchFromGitHub {
+              owner = "luukvdmeer";
+              repo = "sfnetworks";
+              rev = "fe6edf8c9a73160110cbf25b673853b7aa23f927";
+              sha256 = "cDMC5+BP7dxQbJtGjPd0Xk7MnN3PecHLjLYmSO+LOoc=";
+            };
+            propagatedBuildInputs = with pkgs.rPackages; [
+              igraph
+              dplyr
+              lwgeom
+              pillar
+              sf
+              sfheaders
+              tibble
+              tidygraph
+              tidyselect
+              units
+            ];
+          };
         };
       in
       {
@@ -30,7 +51,7 @@
             pkgs.fontconfig
           ];
           packages = builtins.attrValues {
-            inherit (myPackages) patchedQuarto;
+            inherit (myPackages) sfnetworks patchedQuarto;
             inherit (pkgs)
               R
               # quarto
@@ -58,13 +79,19 @@
               crsuggest
               geojsonsf
               fixest
+              glue
+              rjson
+              ggprism
+              rsconnect
               ggpubr
+              ggraph
               ggridges
               ggspatial
               ggtext
               gt
               gtExtras
               hereR
+              igraph
               janitor
               kit
               mapboxapi
@@ -78,6 +105,7 @@
               # rnaturalearth
               # rnaturalearthdata
               rgeoda
+              rmapshaper
               # roxygen2
               rstatix
               rvest
@@ -85,6 +113,7 @@
               segregation
               sf
               sfdep
+              # sfnetworks
               spatialreg
               # spData
               spdep
@@ -93,6 +122,7 @@
               srvyr
               tidycensus
               tidygeocoder
+              tidygraph
               tidymodels
               tidyverse
               tmap

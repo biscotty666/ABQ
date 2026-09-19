@@ -9,6 +9,7 @@ format:
   gfm: default
 execute: 
   freeze: auto
+  cache: true
 number-sections: true
 theme: 
   light: cosmo
