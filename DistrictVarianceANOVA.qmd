@@ -4,6 +4,8 @@ subtitle: "Analysis of Variance"
 format: 
   html:
     toc: true
+    grid:
+      margin-width: 200px
   gfm: default
 theme: 
   light: cosmo
@@ -12,20 +14,19 @@ theme:
 
 # Introduction
 
-This is the third part of a short series of articles in which I am looking at demographics and economic indicators among the population of Albuquerque, New Mexico. More specifically, I'm considering how they vary among city council districts, the extent to which any variation is not merely random, and what potential explanations there are for the variances.
+This is the third in a short series of articles in which I am looking at demographic and economic indicators among the population of Albuquerque, New Mexico. More specifically, I'm considering how they vary among city council districts, the extent to which any variation is not merely random, and what potential explanations there are for the variances.
 
 In the last article, simply mapping the variables and overlaying the council districts seemed to show strong differences between a number of them.  _Spatial autocorrelation_, and the identification of hot and cold spots for many variables, allowed us again to identify apparently significant differences, sometimes extreme, between certain districts.
 
-The current article will be concerned with statistical testing of these apparent variances. A number of hurdles exist before tests can be run, however. ANOVA testing expects variables to be normally distributed. As we saw, few of the variables actually are. They will therefore require an appropriate transformation prior to running the tests. Additionally, as we shall see, many variables will exhibit unequal variance, violating an assumption of the traditional [ANOVA](https://en.wikipedia.org/wiki/Analysis_of_variance) test. For these variables, we will use [Welch's t-test](https://en.wikipedia.org/wiki/Welch's_t-test).
+The current article will be concerned with statistical testing of these apparent variances. A number of hurdles exist before tests can be run, however. ANOVA testing expects variables to be normally distributed. As we saw, few of the variables actually are. They will therefore require an appropriate transformation prior to running the tests. Additionally, as we shall see, many variables will exhibit unequal variance across districts, violating an assumption of the traditional [ANOVA](https://en.wikipedia.org/wiki/Analysis_of_variance) test. For these variables, we will use [Welch's t-test](https://en.wikipedia.org/wiki/Welch's_t-test).
 
 As before, this article has a secondary purpose, encouraging efficient programming. I will continue to demonstrate how the `collapse` package can significantly improve the speed of data processing and transformation. I will make use of matrices rather than data frames where possible, only using the latter where necessary. I will also show how `purrr`'s `partial` function can be used to write simpler and clearer code.
-
-As usual, I will begin by loading the libraries, and the data from last time.
 
 ```{r}
 #| code-fold: true
 #| code-summary: "Show the code"
 #| message: false
+#| output: false
 options(paged.print = FALSE,
         tigris_use_cache = TRUE)
 libraries <- list(
@@ -50,10 +51,7 @@ year <- 2024
 crs <- 6528
 caption <- glue("Source: census.gov, acs5, {year}")
 options(digits = 4)
-```
 
-```{r}
-#| output: false
 abq_data <- 
   st_read("data/district_variance.gpkg", layer = "abq_data") %>% 
   ftransform(Population.Density = NULL, GEOID = NULL, 
@@ -74,6 +72,7 @@ I will begin by recalling a few of the distribution plots constructed last time.
 ```{r}
 #| code-fold: true
 #| code-summary: "Show the code"
+#| fig-height: 3
 plot_hist <- function(df, var) {
   df %>%
     ggplot(aes(.data[[var]])) +
@@ -83,10 +82,7 @@ plot_hist <- function(df, var) {
     geom_line(stat = "density", adjust = 2, color = "blue") +
     labs(caption = caption)
 }
-```
 
-```{r}
-#| fig-height: 3
 hists <- map(var_names, \(x) num_vars(abq_data) %>% plot_hist(x))
 qqs <- map(num_vars(abq_data), ggqqplot)
 c(
@@ -179,18 +175,13 @@ bpGini + rpGini
 
 These plots confirm some of the observations made based on the maps and SA statistics. They also reveal how different the distributions are shaped. In most variables, district 3 has a rather compact distribution, which is closer to normal than any other district. On the other hand, the distributions of the fourth district are generally very wide and not at all normal. The sixth and eighth district show the same tendancy for some of the variables.
 
-Both the lack of normal distribution and the apparent non-homogeneity of variance across the districts will be issues to address when performing the analysis of variance. As the above plots show, only a couple of the variables appear to be normally distributed, and there is little equality of variance.
+Both the lack of normal distribution and the apparent non-homogeneity of variance across the districts will be issues to address when performing the analysis of variance. As the above plots show, only a couple of the variables appear to be normally distributed, and there is little homogeneity of variance.
 
 ## Normalization
 
-With a couple of exceptions, visualization showed that none of these variables appear to be normally distributed. Formally, we can use the [Shapiro-Wilk](https://en.wikipedia.org/wiki/Shapiro%E2%80%93Wilk_test)[^1] test for normal distribution to confirm statistically.
+Formally, we can use the [Shapiro-Wilk](https://en.wikipedia.org/wiki/Shapiro%E2%80%93Wilk_test) test for normal distribution to confirm statistically. The null hypothesis in this test is that the data _is_ normally distributed. $p$-values less than 0.05 indicate that the null hypothesis should be rejected, implying that the data are not normally distributed. I'll start by running a `shapiro_test` on all of the variables, filtering for $p$-values _greater than_ 0.05, which are the normally distributed variables.
 
-[^1]: The statistic is defined as $W = \frac{\left(\sum_{i=1}^n a_ix_{(i)}\right)^2}{\sum_{i=1}^n \left(x_i-\hat{x}\right)^2}$
-
-The null hypothesis in this test is that the data _is_ normally distributed. $p$-values less than 0.05 indicate that the null hypothesis should be rejected, implying that the data are not normally distributed. I'll start by running a `shapiro_test` on all of the variables, filtering for $p$-values greater than 0.05, which are the normally distributed variables.
-
-I'll also demonstrate a handy use of `purrr`'s `partial` function. The `unlist2d` function, which I use frequently, by default adds a `.id` column to the results, something I never want. I will use the `partial` function here to override the default for all future invocations.
-
+I'll also demonstrate a handy use of `purrr`'s `partial` function. The `unlist2d` function, which I use frequently to collapse a list of data frames into a single one, by default adds a `.id` column to the results, something I never want. I will use the `partial` function here to override the default for all future invocations. Note the use of `kit`'s fast `iif` function.
 
 ```{r}
 unlist2d <- partial(unlist2d, idcols = F)
@@ -270,9 +261,9 @@ microbenchmark(
 
 # Analysis of Variance
 
-## Equality of variance (Bartlett's test)
+## Homogeneity of variance
 
-Now that I have normally distributed variables, I need to address the second assumption of ANOVA tests, which is equality of variance among the districts. [Bartlett's test](https://en.wikipedia.org/wiki/Bartlett's_test) can be used for that purpose.
+Now that I have normally distributed variables, I need to address the second assumption of ANOVA tests, which is homogeneity of variance among the districts. [Bartlett's test](https://en.wikipedia.org/wiki/Bartlett's_test) can be used for that purpose.
 
 The null hypothesis in Bartlett's test is that all population variances are equal among the districts, while the alternative hypothesis is that at least two are different. These tests require data frames, so I will need to convert the matrices and add back the district column.
 
@@ -281,21 +272,15 @@ abq_data_blom <- qDF(abq_data_blom_m) %>%
   add_vars(districts, pos = "front")
 vars_list <- gv(abq_data_blom, var_names) %>% as.list
 
-btests <- map2(
-  var_names,
-  vars_list,
-  \(x, y) list(x, bartlett.test(y ~ district, abq_data_blom))
-)
+btests <- map2(var_names, vars_list,
+  \(x, y) list(x, bartlett.test(y ~ district, abq_data_blom)))
 
 data.frame(
-  variable = unlist(map(
-    seq_len(length(btests)),
+  variable = unlist(map(seq_len(length(btests)),
     \(x) btests[[x]][[1]])),
-  statistic = unlist(map(
-    seq_len(length(btests)),
+  statistic = unlist(map(seq_len(length(btests)),
     \(x) btests[[x]][[2]]$statistic)),
-  p_value = unlist(map(
-    seq_len(length(btests)),
+  p_value = unlist(map(seq_len(length(btests)),
     \(x) btests[[x]][[2]]$p.value %>% round(., 3)))) %>% 
   fsubset(p_value > .05)
 ```
@@ -304,7 +289,7 @@ As expected, only some of the variables show homogeneity of variance, and only o
 
 ## ANOVA
 
-Median house value, median income, percent foreign born, Hispanic, and college graduate variables do not show homogeneity of variance, and so I will remove them for purposes of the classic ANOVA test.
+I will remove the them for purposes of the classic ANOVA test.
 
 ```{r}
 var_names_aov <- var_names[c(2:4, 9:11)]
@@ -348,7 +333,7 @@ All of the variables show statistically significant variance among at least some
 
 ## Tukey's HSD
 
-Of course, things get more interesting when we look at the _post hoc_ tests. The amusingly named Tukey's Honestly Significant Difference Test, or [Tukey's range test](https://en.wikipedia.org/wiki/Tukey's_range_test), allows us to find out where the significant differences are for the ANOVA tests.
+Of course, things get more interesting when we look at the _post hoc_ tests. The amusingly named Tukey's Honestly Significant Difference Test, or [Tukey's range test](https://en.wikipedia.org/wiki/Tukey's_range_test), allows us to find out between which districts the significant differences are for the ANOVA tests.
 
 ```{r}
 TukeyHSD(aov_tests[[1]][[2]])$district %>% head(3)
@@ -356,31 +341,23 @@ TukeyHSD(aov_tests[[1]][[2]])$district %>% head(3)
 The output of a single `TukeyHSD` is fine, but running the test for multiple variables and simplifying the output for easy manipulation requires some work, such as splitting the single district variable into two. I also want to filter out insignificant results.
 
 ```{r}
-results_tky <- map(
-  aov_tests,
-  \(x) TukeyHSD(x[[2]])$district %>%
-    as.data.frame %>%
-    fsubset(`p adj` <= .05) %>%
-    fmutate(variable = x[[1]]) %>%
+results_tky <- map(aov_tests,
+  \(x) TukeyHSD(x[[2]])$district %>% as.data.frame %>%
+    fsubset(`p adj` <= .05) %>% fmutate(variable = x[[1]]) %>%
     rownames_to_column("districts")
-) %>%
-  unlist2d %>%
+) %>% unlist2d %>%
   separate(districts, c("District.1", "District.2"), sep = "-")
 ```
 
-I need to clean up the data a bit in order to ensure, for example, that duplicates get eliminated. Note the use of `kit`'s fast `iif` function.
+I need to clean up the data a bit in order to ensure, for example, that duplicates get eliminated.
 
 ```{r}
 dist_names <- funique(districts$district)
-
-tk_compare <- map(
-  dist_names,
+tk_compare <- map(dist_names,
   \(x) results_tky %>%
     fsubset(District.1 == x | District.2 == x) %>%
-    fmutate(
-      district = x,
-      compare = iif(District.1 == x, District.2, District.1)
-    ) %>% 
+    fmutate(district = x,
+            compare = iif(District.1 == x, District.2, District.1)) %>% 
     fselect(variable, district, compare, diff, `p adj`)
 ) %>% unlist2d %>% roworder(variable)
 ```
@@ -388,9 +365,8 @@ tk_compare <- map(
 Only one of the variables in which we have been interested was a candidate for ANOVA. I'll display that here.
 
 ```{r}
-aov_gini <- fsubset(tk_compare, variable == "Gini") %>% 
-  funique(cols = 4)
-aov_gini
+(aov_gini <- fsubset(tk_compare, variable == "Gini") %>% 
+  funique(cols = 4))
 ```
 
 ::: {.callout-note collapse="true"}
@@ -403,8 +379,7 @@ aov_gini_2 <- fsubset(tk_compare, variable == "Gini") %>%
     dist = pmin(district, compare),
     comp = pmax(district, compare)
   )
-funique(aov_gini_2, cols = c("dist", "comp")) %>% 
-  gv(-c(6, 7))
+funique(aov_gini_2, cols = c("dist", "comp")) %>% gv(-c(6, 7))
 ```
 
 :::
@@ -417,29 +392,26 @@ rowbind(fcount(aov_gini$district), fcount(aov_gini$compare)) %>%
                                            N = "count")
 ```
 
-Four districts show no variance at all, while those that do only show variance with only two or three other districts. As we saw in the last article, inequality is more randomly distributed geographically than any of the other variables of interest.
+Four districts show no variance at all, while those that do show variance with only two or three other districts. As we saw in the last article, inequality is more randomly distributed geographically than any of the other variables of interest.
 
 ## Games-Howell
 
-Although we can't use Tukey's HSD for the rest of the variables, I can use the Games-Howell test, which does not require homogeneity of variance. First, I'll execute the test for each variable, capturing the information I want, and processing these results in a similar manner as before.
+Although I can't use Tukey's HSD for the rest of the variables, I can use the Games-Howell test, which does not require homogeneity of variance. First, I'll execute the test for each variable, capturing the information I want, and processing these results in a similar manner as before.
 
 ```{r}
-results_gh <- map(
-  var_names,
+results_gh <- map(var_names,
   \(x) games_howell_test(
-    abq_data_blom, as.formula(glue("{x} ~ district"))
-    ) %>%
+    abq_data_blom, as.formula(glue("{x} ~ district"))) %>%
     fsubset(p.adj.signif %!=% "ns") %>%
     fselect(variable = .y., district = group1, compare = group2, 
             estimate, p.adj, p.adj.signif)) %>% unlist2d
 
-gh_compare <- map(
-  dist_names,
+gh_compare <- map(dist_names,
   \(x) results_gh %>%
     fsubset(district == x | compare == x) %>%
-    fmutate(district = x,
-            compare = iif(district == x, compare, district))) %>% 
-  unlist2d
+    fmutate(
+      district = x,
+      compare = iif(district == x, compare, district))) %>% unlist2d
 ```
 
 Now I can create the output I want.
@@ -514,13 +486,13 @@ The sixth district appears to have significantly lower median incomes than most 
 gh_dist_comp("Income.Med", "Dist 8")
 ```
 
-District 8, on the other hand shows consistently higher income levels than at least four others, predictably those in the southwest and the more centrally located seventh district. Income levels which aren't statistically different from the eighth district are found in those districts which which wrap around the northwestern, northern and northeastern edges of the city. Finally, consider the fifth district. This is in the far northwest, and is growing quickly both residentially and commercially.
+District 8, on the other hand shows consistently higher income levels than at least four others, predictably those in the southwest and the more centrally located seventh district. Income levels which are _not_ statistically different from the eighth district are found in those districts which which wrap around the northwestern, northern and northeastern edges of the city. Finally, consider the fifth district. This is in the far northwest, and is growing quickly both residentially and commercially.
 
 ```{r}
 gh_dist_comp("Income.Med", "Dist 5")
 ```
 
-This district shows variances with the same four districts identified above. This is interesting because the fifth district was not at all unusual in terms of house prices.
+This district shows variances with the same four districts identified above. This is interesting because, unlike the eighth,  the fifth district was not at all unusual in terms of house prices.
 
 Now I will turn to the demographic variables.
 
@@ -554,13 +526,12 @@ gh_dist_comp("College.Pct", "Dist 3")
 gh_dist_comp("College.Pct", "Dist 8")
 ```
 
-College educated people seem to be concentrated in the northeast and east. A couple of points to note. The ninth district, while being similar to the eighth here and in terms of income levels, never-the-less showed significantly lower house prices. On the other hand, the first district, which shows a significantly lower value from the eighth, was shown to be statistically similar in terms of income and housing prices.
+College educated people seem to be concentrated in the northeast and east. A couple of points to note. The ninth district, while being similar to the eighth, both in terms of education and income levels, never-the-less showed significantly lower house prices. On the other hand, the first district, which shows a significantly lower density of college graduates, was statistically similar in terms of income and housing prices.
 
 # Conclusion
 
-The analyses in this article confirm statistically many of the impressions gained in the prior article, namely that there is significant demographic and economic differences between many districts. The general trend seems to be for economic indicators to be higher in the outer districts to the north, northeast and eastern districts, while they are lower in the southern and southwestern districts. The eighth, in the far northeast, and the third, in the far southwest, show significant, often extreme, ends of the spectrum for many of the variables. Interestingly, the third district, which stands out for most variables, turns out not to be so different from the others, with a couple of exceptions, in terms of income. Finally, inequality, as measured by the Gini index, seems to be pretty equally distributed among the districts, with only a handful of statistically significant variances discovered.
+The analyses in this article confirm statistically many of the impressions gained in the prior article, namely that there is significant demographic and economic differences between many districts, differences which are not random. The general trend seems to be for economic indicators to be higher in the outer districts to the north, northeast and eastern districts, while they are lower in the southern and southwestern districts. The eighth, in the far northeast, and the third, in the far southwest, show significant, often extreme, ends of the spectrum for many of the variables. Interestingly, the third district, which stands out for most variables, turns out not to be so different from the others, with a couple of exceptions, in terms of income. Finally, inequality, as measured by the Gini index, seems to be pretty equally distributed among the districts, with only a handful of statistically significant variances discovered.
 
-My intention is to proceed to logistic regression modeling, which will be a little tricky as, with nine districts to consider, I will need to use multinomial logistic regression for some of the models. However, before doing so, I would like to do some analysis of the road network in Albuquerque, considering access to, density of, and distance from, certain types of facilities such as government offices, hospitals and financial institutions.
 
 
 
